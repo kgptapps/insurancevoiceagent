@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Insurance Voice Agent</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    #conversation { border: 1px solid #ccc; padding: 10px; height: 200px; overflow-y: scroll; }
+    #jsonOutput { background: #f9f9f9; padding: 10px; }
+    button { margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Insurance Voice Agent</h1>
+  <label>OpenAI API Key: <input type="password" id="apiKey"></label>
+  <div id="conversation"></div>
+  <button id="recordBtn">Start Recording</button>
+  <h2>Collected Data</h2>
+  <pre id="jsonOutput">{}</pre>
+  <script src="script.js"></script>
+</body>
+</html>
