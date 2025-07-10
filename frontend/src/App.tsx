@@ -16,17 +16,19 @@ function App() {
   const [collectedData, setCollectedData] = useState<any>({});
   const sessionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const audioBufferRef = useRef<Uint8Array[]>([]);
-  const audioTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Cleanup audio context and timeouts on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (audioContextRef.current) {
         audioContextRef.current.close();
       }
-      if (audioTimeoutRef.current) {
-        clearTimeout(audioTimeoutRef.current);
+      if (sessionRef.current) {
+        try {
+          sessionRef.current.close();
+        } catch (error) {
+          console.log('Session cleanup error (expected):', error);
+        }
       }
     };
   }, []);
@@ -41,189 +43,7 @@ function App() {
     return audioContextRef.current;
   };
 
-  // Buffer and play accumulated audio chunks
-  const playBufferedAudio = async () => {
-    if (audioBufferRef.current.length === 0) return;
-
-    try {
-      const audioContext = initializeAudioContext();
-
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume();
-      }
-
-      // Combine all buffered chunks
-      const totalLength = audioBufferRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
-      const combinedBuffer = new Uint8Array(totalLength);
-      let offset = 0;
-
-      for (const chunk of audioBufferRef.current) {
-        combinedBuffer.set(chunk, offset);
-        offset += chunk.length;
-      }
-
-      console.log('Playing buffered audio, total length:', totalLength);
-
-      // Convert PCM16 data to AudioBuffer
-      const pcm16Data = new Int16Array(combinedBuffer.buffer);
-
-      if (pcm16Data.length === 0) {
-        console.warn('Empty PCM16 data after buffering');
-        return;
-      }
-
-      const audioBuffer = audioContext.createBuffer(1, pcm16Data.length, 24000);
-      const channelData = audioBuffer.getChannelData(0);
-
-      // Convert Int16 to Float32 (normalize)
-      for (let i = 0; i < pcm16Data.length; i++) {
-        channelData[i] = pcm16Data[i] / 32768.0;
-      }
-
-      // Play the audio
-      const source = audioContext.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioContext.destination);
-      source.start();
-
-      console.log('Buffered audio played successfully, duration:', audioBuffer.duration, 'seconds');
-
-      // Clear the buffer after playing
-      audioBufferRef.current = [];
-    } catch (error) {
-      console.error('Error playing buffered audio:', error);
-    }
-  };
-
-  // Play audio from RealtimeSession audio event
-  const playAudioFromEvent = async (event: any) => {
-    try {
-      console.log('Processing audio event:', {
-        type: event.type,
-        hasAudio: !!event.audio,
-        hasDelta: !!event.delta,
-        audioType: typeof event.audio,
-        deltaType: typeof event.delta,
-        eventKeys: Object.keys(event)
-      });
-
-      const audioContext = initializeAudioContext();
-
-      // Resume audio context if suspended (required by browser policies)
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume();
-      }
-
-      let audioData: ArrayBuffer | null = null;
-
-      // Handle different audio event formats based on OpenAI Realtime API
-      if (event.audio) {
-        // If audio is base64 encoded string
-        if (typeof event.audio === 'string') {
-          console.log('Processing base64 audio data, length:', event.audio.length);
-          const binaryString = atob(event.audio);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          audioData = bytes.buffer;
-        } else if (event.audio instanceof ArrayBuffer) {
-          console.log('Processing ArrayBuffer audio data');
-          audioData = event.audio;
-        } else if (event.audio instanceof Uint8Array) {
-          console.log('Processing Uint8Array audio data');
-          audioData = event.audio.buffer;
-        } else {
-          console.warn('Unknown audio format:', typeof event.audio, event.audio);
-          return;
-        }
-      } else if (event.delta) {
-        // Handle delta audio format (incremental audio chunks)
-        if (typeof event.delta === 'string') {
-          console.log('Processing base64 delta data, length:', event.delta.length);
-
-          // Skip very small or invalid base64 chunks
-          if (event.delta.length < 4) {
-            console.log('Skipping too small delta chunk:', event.delta.length);
-            return;
-          }
-
-          // Validate base64 format
-          const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
-          if (!base64Regex.test(event.delta)) {
-            console.warn('Invalid base64 format in delta:', event.delta);
-            return;
-          }
-
-          try {
-            const binaryString = atob(event.delta);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
-
-            // Add to buffer instead of playing immediately
-            audioBufferRef.current.push(bytes);
-            console.log('Added audio chunk to buffer, buffer size:', audioBufferRef.current.length);
-
-            // Clear any existing timeout
-            if (audioTimeoutRef.current) {
-              clearTimeout(audioTimeoutRef.current);
-            }
-
-            // Set a timeout to play buffered audio after a short delay
-            audioTimeoutRef.current = setTimeout(() => {
-              playBufferedAudio();
-            }, 100); // Wait 100ms for more chunks
-
-            return; // Don't continue with immediate playback
-          } catch (error) {
-            console.warn('Failed to decode base64 delta:', error, 'Data:', event.delta);
-            return;
-          }
-        } else {
-          console.warn('Unknown delta format:', typeof event.delta);
-          return;
-        }
-      } else {
-        console.warn('No audio data found in event:', event);
-        return;
-      }
-
-      if (!audioData || audioData.byteLength === 0) {
-        console.warn('Empty audio data');
-        return;
-      }
-
-      // Convert PCM16 data to AudioBuffer
-      const pcm16Data = new Int16Array(audioData);
-      console.log('PCM16 data length:', pcm16Data.length);
-
-      if (pcm16Data.length === 0) {
-        console.warn('Empty PCM16 data');
-        return;
-      }
-
-      const audioBuffer = audioContext.createBuffer(1, pcm16Data.length, 24000);
-      const channelData = audioBuffer.getChannelData(0);
-
-      // Convert Int16 to Float32 (normalize)
-      for (let i = 0; i < pcm16Data.length; i++) {
-        channelData[i] = pcm16Data[i] / 32768.0;
-      }
-
-      // Play the audio
-      const source = audioContext.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioContext.destination);
-      source.start();
-
-      console.log('Audio played successfully, duration:', audioBuffer.duration, 'seconds');
-    } catch (error) {
-      console.error('Error playing audio:', error);
-    }
-  };
-
+  // Get session token from backend
   const getSessionToken = async () => {
     const response = await fetch('http://localhost:3001/api/session-token', {
       method: 'POST',
@@ -246,279 +66,43 @@ function App() {
     return data.token;
   };
 
-  const onConnect = async () => {
-    if (isConnected) {
-      // Disconnect
-      setIsConnected(false);
-      setStatus('Disconnecting...');
-      await sessionRef.current?.close();
-      sessionRef.current = null;
-      setStatus('Disconnected');
-      setConversationHistory([]);
-    } else {
-      // Connect
-      try {
-        setIsLoading(true);
-        setStatus('Getting session token...');
+  // Play audio from OpenAI Realtime API
+  const playAudio = async (audioData: string) => {
+    try {
+      const audioContext = initializeAudioContext();
 
-        // Initialize audio context with user interaction
-        initializeAudioContext();
-
-        const token = await getSessionToken();
-        console.log('Got token:', token ? token.substring(0, 20) + '...' : 'undefined');
-
-        if (!token) {
-          throw new Error('No token received from backend');
-        }
-
-        setStatus('Creating session...');
-
-        // Import the RealtimeAgent and RealtimeSession dynamically
-        const { RealtimeAgent, RealtimeSession } = await import('@openai/agents/realtime');
-
-        // Create the insurance agent
-        const insuranceAgent = new RealtimeAgent({
-          name: 'Sarah - Insurance Specialist',
-          instructions: `You are Sarah, a friendly and experienced auto insurance specialist who genuinely cares about helping people find the right coverage. You have a warm, conversational style and make insurance feel approachable and easy to understand.
-
-Your personality:
-- Warm, friendly, and genuinely interested in helping - with a pleasant, professional female voice
-- Great at building rapport and making people feel comfortable and at ease
-- Excellent at explaining complex insurance concepts in simple, relatable terms
-- Patient and never pushy - you let conversations flow naturally with feminine grace
-- Professional but personable - like talking to a knowledgeable, caring female friend
-
-Your conversational approach:
-- Start with a warm, personal greeting and ask how their day is going
-- Show genuine interest in their situation and needs
-- Use natural conversation flow - don't just ask questions in sequence
-- Share relevant insights and tips that show your expertise
-- Use analogies and examples to explain insurance concepts
-- Ask follow-up questions that show you're listening
-- Acknowledge their concerns and validate their feelings about insurance
-
-Information you need to collect naturally through conversation:
-- Personal details (name, age, address, contact info)
-- Vehicle information (make, model, year, usage)
-- Driving history and experience
-- Coverage preferences and budget
-- Any specific concerns or priorities
-
-Start with: "Hi there! I'm Sarah, and I'm here to help you find the perfect auto insurance coverage. Before we dive in, how's your day going so far?"
-
-Remember: This should feel like a natural conversation with a helpful expert, not an interrogation. Build trust, show expertise, and make the process enjoyable!`,
-        });
-
-        sessionRef.current = new RealtimeSession(insuranceAgent, {
-          model: 'gpt-4o-realtime-preview-2025-06-03',
-          transport: 'websocket', // Use WebSocket for manual audio handling
-          config: {
-            voice: 'alloy', // Female voice - warm and professional
-            inputAudioFormat: 'pcm16',
-            outputAudioFormat: 'pcm16',
-            turnDetection: {
-              type: 'server_vad',
-              threshold: 0.3,
-              prefixPaddingMs: 300,
-              silenceDurationMs: 200
-            }
-          }
-        });
-
-        // Set up event listeners
-        sessionRef.current.on('transport_event', (event: any) => {
-          console.log('Transport event:', event);
-
-          // Check for audio-related transport events
-          if (event.type && event.type.includes('audio')) {
-            console.log('Audio transport event detected:', event);
-          }
-
-          // Check for response events that might contain audio
-          if (event.type === 'response.audio.delta') {
-            console.log('🔊 Audio delta event:', event);
-            if (event.delta) {
-              playAudioFromEvent(event);
-            }
-          } else if (event.type === 'response.audio_transcript.delta') {
-            console.log('📝 Audio transcript delta (text):', event.delta);
-            // This is text transcription, not audio data - don't try to play it
-          } else if (event.type === 'response.audio.done') {
-            console.log('🔊 Audio response completed');
-          } else if (event.type && event.type.includes('audio')) {
-            console.log('🎵 Other audio event:', event.type, event);
-          }
-        });
-
-        sessionRef.current.on('history_updated', (history: any) => {
-          console.log('History updated:', history);
-          setConversationHistory(history);
-        });
-
-        // Handle audio output for WebSocket transport
-        sessionRef.current.on('audio', async (event: any) => {
-          console.log('Audio event received:', event);
-          try {
-            await playAudioFromEvent(event);
-          } catch (error) {
-            console.error('Error playing audio:', error);
-          }
-        });
-
-        // Listen for all possible audio events
-        sessionRef.current.on('audio_output', async (event: any) => {
-          console.log('Audio output event:', event);
-          try {
-            await playAudioFromEvent(event);
-          } catch (error) {
-            console.error('Error playing audio output:', error);
-          }
-        });
-
-        // Listen for response events
-        sessionRef.current.on('response', (event: any) => {
-          console.log('Response event:', event);
-        });
-
-        // Listen for conversation updates
-        sessionRef.current.on('conversation_updated', (event: any) => {
-          console.log('Conversation updated:', event);
-        });
-
-        sessionRef.current.on('error', (error: any) => {
-          console.error('Session error:', error);
-          setStatus(`Error: ${error.message || 'Unknown error'}`);
-        });
-
-        setStatus('Connecting to OpenAI...');
-        console.log('Attempting to connect with token:', token.substring(0, 20) + '...');
-
-        await sessionRef.current.connect({ apiKey: token });
-
-        console.log('Successfully connected to OpenAI!');
-        setIsConnected(true);
-        setStatus('Connected! You can now speak.');
-
-      } catch (error) {
-        console.error('Connection error:', error);
-        console.error('Error details:', {
-          message: error instanceof Error ? error.message : 'Unknown error',
-          stack: error instanceof Error ? error.stack : undefined,
-          error: error
-        });
-        setStatus(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        setIsConnected(false);
-      } finally {
-        setIsLoading(false);
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
       }
+
+      // Decode base64 audio data
+      const binaryString = atob(audioData);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      // Convert PCM16 data to AudioBuffer
+      const pcm16Data = new Int16Array(bytes.buffer);
+      const audioBuffer = audioContext.createBuffer(1, pcm16Data.length, 24000);
+      const channelData = audioBuffer.getChannelData(0);
+
+      // Convert Int16 to Float32 (normalize)
+      for (let i = 0; i < pcm16Data.length; i++) {
+        channelData[i] = pcm16Data[i] / 32768.0;
+      }
+
+      // Play the audio
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContext.destination);
+      source.start();
+
+      console.log('Audio played successfully, duration:', audioBuffer.duration, 'seconds');
+    } catch (error) {
+      console.error('Error playing audio:', error);
     }
   };
-
-  // Extract and parse collected data from conversation
-  const extractDataFromConversation = (history: any[]) => {
-    const data: any = {};
-
-    // Look for structured data in both user and assistant messages
-    history.forEach((item) => {
-      if ((item.role === 'user' || item.role === 'assistant') && item.content) {
-        const content = Array.isArray(item.content)
-          ? item.content.map((c: any) => c.text || c.transcript || '').join(' ')
-          : item.content || '';
-
-        // Extract structured information using regex patterns
-        const patterns = {
-          name: /(?:name is|I'm|my name is|call me|hi I'm|hello I'm)\s+([A-Za-z\s]+)/i,
-          age: /(?:age is|I'm|years old|age|born in)\s+(\d+)/i,
-          email: /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i,
-          phone: /(?:phone|number|call me at|reach me at)\s*(?:is\s*)?(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/i,
-          address: /(?:live at|address is|located at|I live|reside at|home is)\s+([^.!?]+)/i,
-          city: /(?:in|from|live in)\s+([A-Za-z\s]+),?\s*([A-Z]{2})/i,
-          vehicle: /(?:drive|car|vehicle|have a|own a)\s+(?:a\s+)?(\d{4})\s+([A-Za-z]+)\s+([A-Za-z]+)/i,
-          vehicle_simple: /(?:drive|car|vehicle|have a|own a)\s+(?:a\s+)?([A-Za-z]+)\s+([A-Za-z]+)/i,
-          insurance_type: /(?:need|want|looking for|interested in)\s+([^.!?]*insurance[^.!?]*)/i,
-          marital_status: /(?:I'm|I am)\s+(married|single|divorced|widowed)/i,
-          occupation: /(?:work as|job is|I'm a|occupation is)\s+([^.!?]+)/i,
-          driving_years: /(?:driving for|been driving|driving experience)\s+(\d+)\s+years?/i,
-          accidents: /(?:had|been in)\s+(\d+)\s+(?:accident|crash)/i,
-          tickets: /(?:got|received|had)\s+(\d+)\s+(?:ticket|violation)/i
-        };
-
-        Object.entries(patterns).forEach(([key, pattern]) => {
-          const match = content.match(pattern);
-          if (match) {
-            switch (key) {
-              case 'name':
-                data.personalInfo = { ...data.personalInfo, fullName: match[1].trim() };
-                break;
-              case 'age':
-                data.personalInfo = { ...data.personalInfo, age: parseInt(match[1]) };
-                break;
-              case 'email':
-                data.personalInfo = { ...data.personalInfo, email: match[1] };
-                break;
-              case 'phone':
-                data.personalInfo = { ...data.personalInfo, phone: `${match[1]}-${match[2]}-${match[3]}` };
-                break;
-              case 'address':
-                data.personalInfo = { ...data.personalInfo, address: match[1].trim() };
-                break;
-              case 'city':
-                data.personalInfo = { ...data.personalInfo, city: match[1].trim(), state: match[2] };
-                break;
-              case 'vehicle':
-                data.vehicleInfo = { ...data.vehicleInfo, year: match[1], make: match[2], model: match[3] };
-                break;
-              case 'vehicle_simple':
-                if (!data.vehicleInfo?.year) {
-                  data.vehicleInfo = { ...data.vehicleInfo, make: match[1], model: match[2] };
-                }
-                break;
-              case 'insurance_type':
-                data.coverageInfo = { ...data.coverageInfo, type: match[1].trim() };
-                break;
-              case 'marital_status':
-                data.personalInfo = { ...data.personalInfo, maritalStatus: match[1] };
-                break;
-              case 'occupation':
-                data.personalInfo = { ...data.personalInfo, occupation: match[1].trim() };
-                break;
-              case 'driving_years':
-                data.drivingHistory = { ...data.drivingHistory, yearsOfExperience: parseInt(match[1]) };
-                break;
-              case 'accidents':
-                data.drivingHistory = { ...data.drivingHistory, accidents: parseInt(match[1]) };
-                break;
-              case 'tickets':
-                data.drivingHistory = { ...data.drivingHistory, tickets: parseInt(match[1]) };
-                break;
-            }
-          }
-        });
-      }
-    });
-
-    return data;
-  };
-
-  // Extract conversation messages for display
-  const messages = conversationHistory
-    .filter((item) => item.type === 'message')
-    .map((item, index) => ({
-      id: index,
-      role: item.role,
-      content: Array.isArray(item.content)
-        ? item.content.map((c: any) => c.text || c.transcript || JSON.stringify(c)).join(' ')
-        : item.content || JSON.stringify(item)
-    }));
-
-  // Update collected data when conversation changes
-  useEffect(() => {
-    const newData = extractDataFromConversation(conversationHistory);
-    if (Object.keys(newData).length > 0) {
-      newData.lastUpdated = new Date().toLocaleTimeString();
-    }
-    setCollectedData(newData);
-  }, [conversationHistory]);
 
   // Test audio playback with a simple tone
   const testAudioPlayback = async () => {
@@ -547,10 +131,636 @@ Remember: This should feel like a natural conversation with a helpful expert, no
       source.start();
 
       console.log('Test audio played successfully');
+      setStatus('Test audio played - speakers working!');
     } catch (error) {
       console.error('Error playing test audio:', error);
+      setStatus('Test audio failed - check speakers');
     }
   };
+
+  // Main connection function
+  const onConnect = async () => {
+    if (isConnected) {
+      // Disconnect
+      setIsConnected(false);
+      setStatus('Disconnecting...');
+      if (sessionRef.current) {
+        try {
+          await sessionRef.current.close();
+        } catch (error) {
+          console.log('Session close error (expected):', error);
+        }
+        sessionRef.current = null;
+      }
+      setStatus('Disconnected');
+      setConversationHistory([]);
+      setCollectedData({});
+    } else {
+      // Connect
+      try {
+        setIsLoading(true);
+        setStatus('Getting session token...');
+
+        // Initialize audio context with user interaction
+        initializeAudioContext();
+
+        const token = await getSessionToken();
+        console.log('Got token:', token ? token.substring(0, 20) + '...' : 'undefined');
+
+        if (!token) {
+          throw new Error('No token received from backend');
+        }
+
+        setStatus('Creating session...');
+
+        // Import the RealtimeAgent and RealtimeSession dynamically
+        const { RealtimeAgent, RealtimeSession } = await import('@openai/agents/realtime');
+
+        // Create the insurance agent
+        const insuranceAgent = new RealtimeAgent({
+          name: 'Sarah - Insurance Specialist',
+          instructions: `You are Sarah, a friendly and experienced auto insurance specialist. You have a warm, conversational style and make insurance feel approachable.
+
+Your personality:
+- Warm, friendly, and genuinely interested in helping
+- Great at building rapport and making people feel comfortable
+- Excellent at explaining complex insurance concepts in simple terms
+- Patient and never pushy - you let conversations flow naturally
+- Professional but personable
+
+Your conversational approach:
+- Start with a warm greeting and ask how their day is going
+- Show genuine interest in their situation and needs
+- Use natural conversation flow - don't just ask questions in sequence
+- Share relevant insights and tips that show your expertise
+
+Information you need to collect naturally through conversation:
+- Personal details (name, age, address, contact info)
+- Vehicle information (make, model, year, usage)
+- Driving history and experience
+- Coverage preferences and budget
+
+Start with: "Hi there! I'm Sarah, and I'm here to help you find the perfect auto insurance coverage. How's your day going so far?"
+
+Remember: This should feel like a natural conversation with a helpful expert, not an interrogation.`,
+        });
+
+        sessionRef.current = new RealtimeSession(insuranceAgent, {
+          model: 'gpt-4o-realtime-preview-2025-06-03',
+          config: {
+            voice: 'alloy',
+            inputAudioFormat: 'pcm16',
+            outputAudioFormat: 'pcm16',
+            turnDetection: {
+              type: 'server_vad',
+              threshold: 0.3,
+              prefixPaddingMs: 300,
+              silenceDurationMs: 200
+            }
+          }
+        });
+
+        // Set up event listeners for audio and conversation
+        sessionRef.current.on('transport_event', (event: any) => {
+          console.log('Transport event:', event.type, event);
+
+          // Handle audio delta events for streaming
+          if (event.type === 'response.audio.delta' && event.delta) {
+            console.log('🔊 Audio delta received');
+            playAudio(event.delta);
+          }
+
+          // Handle conversation item creation (user input)
+          if (event.type === 'conversation.item.created') {
+            console.log('📝 Conversation item created:', event.item);
+            if (event.item.type === 'message' && event.item.role === 'user') {
+              setConversationHistory(prev => [...prev, {
+                id: event.item.id,
+                role: 'user',
+                content: event.item.content || 'Audio input',
+                timestamp: new Date().toISOString()
+              }]);
+            }
+          }
+
+          // Handle response creation (assistant output)
+          if (event.type === 'response.created') {
+            console.log('🤖 Response created:', event.response);
+          }
+
+          // Handle response completion
+          if (event.type === 'response.done') {
+            console.log('✅ Response completed:', event.response);
+            if (event.response.output && event.response.output.length > 0) {
+              const output = event.response.output[0];
+              if (output.type === 'message' && output.content) {
+                const textContent = output.content
+                  .filter((c: any) => c.type === 'text')
+                  .map((c: any) => c.text)
+                  .join(' ');
+
+                if (textContent) {
+                  setConversationHistory(prev => [...prev, {
+                    id: output.id || Date.now().toString(),
+                    role: 'assistant',
+                    content: textContent,
+                    timestamp: new Date().toISOString()
+                  }]);
+                }
+              }
+            }
+          }
+
+          // Handle input audio transcription
+          if (event.type === 'conversation.item.input_audio_transcription.completed') {
+            console.log('🎤 User transcript:', event.transcript);
+            setConversationHistory(prev => {
+              // Update the last user message with the transcript
+              const newHistory = [...prev];
+              // Find last user message index (reverse search)
+              let lastUserIndex = -1;
+              for (let i = newHistory.length - 1; i >= 0; i--) {
+                if (newHistory[i].role === 'user') {
+                  lastUserIndex = i;
+                  break;
+                }
+              }
+              if (lastUserIndex >= 0) {
+                newHistory[lastUserIndex] = {
+                  ...newHistory[lastUserIndex],
+                  content: event.transcript
+                };
+              }
+              return newHistory;
+            });
+          }
+        });
+
+        sessionRef.current.on('error', (error: any) => {
+          console.error('Session error:', error);
+          setStatus(`Error: ${error.message || 'Unknown error'}`);
+        });
+
+        setStatus('Connecting to OpenAI...');
+        await sessionRef.current.connect({ apiKey: token });
+
+        console.log('Successfully connected to OpenAI!');
+        setIsConnected(true);
+        setStatus('Connected! You can now speak.');
+
+      } catch (error) {
+        console.error('Connection error:', error);
+        setStatus(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        setIsConnected(false);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  // Extract insurance data from conversation
+  const extractDataFromConversation = (history: any[]) => {
+    const data: any = {
+      conversationLength: history.length,
+      lastUpdated: new Date().toLocaleTimeString(),
+      extractedInfo: {}
+    };
+
+    // Combine all conversation text for analysis
+    const allText = history
+      .map(item => item.content || '')
+      .join(' ');
+
+    console.log('Analyzing text for extraction:', allText);
+
+    // Extract comprehensive insurance information using improved patterns
+    const patterns = {
+      // Personal Information
+      name: /(?:name is|i'm|my name is|call me|hi i'm|hello i'm)\s+([a-zA-Z\s]+?)(?:\s|$|\.|\,)/i,
+      age: /(?:age is|i'm|years old|age|born in)\s+(\d+)/i,
+      birth_date: /(?:born on|birthday is|birth date|born)\s+([a-zA-Z0-9\/\-\s]+)/i,
+      email: /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i,
+      phone: /(?:phone|number|call me at|reach me at)\s*(?:is\s*)?(?:\+?1[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/i,
+      ssn: /(?:social security|ssn|social)\s*(?:number|is)?\s*(\d{3}[-.\s]?\d{2}[-.\s]?\d{4})/i,
+
+      // Address Information
+      address: /(?:live at|address is|located at)\s+([^.!?]+)/i,
+      city: /(?:live in|from|in|located in|city is)\s+([a-zA-Z\s]+?)(?:\s|$|\.|\,)/i,
+      state: /(?:state|in)\s+([A-Z]{2}|[a-zA-Z\s]+?)(?:\s|$|\.|\,)/i,
+      zip_code: /(?:zip code|zip|postal code)\s*(?:is\s*)?(\d{5}(?:-\d{4})?)/i,
+
+      // Personal Details
+      marital_status: /(?:i'm|i am)\s+(married|single|divorced|widowed)/i,
+      occupation: /(?:work as|job is|i'm a|occupation is|work at|employed as)\s+([^.!?]+)/i,
+
+      // Driver's License
+      license_number: /(?:license number|driver's license|dl number)\s*(?:is\s*)?([a-zA-Z0-9]+)/i,
+      license_state: /(?:license from|licensed in)\s+([a-zA-Z\s]+)/i,
+
+      // Vehicle Information - Enhanced patterns for multiple vehicles
+      vehicle_year_make_model: /(?:drive|car|vehicle|have a|own a|driving a|got a|second car|other car|also have|another car|my wife drives|husband drives|it's|its)\s+(?:a\s+)?(\d{4})\s+([a-zA-Z]+)\s+([a-zA-Z]+)/gi,
+      vehicle_make_model: /(?:drive|car|vehicle|have a|own a|driving a|got a|second car|other car|also have|another car|my wife drives|husband drives|it's|its)\s+(?:a\s+)?([a-zA-Z]+)\s+([a-zA-Z]+)(?:\s|$|\.|\,)/gi,
+      vehicle_simple: /(?:drive|car|vehicle|have a|own a|driving a|got a|second car|other car|also have|another car|my wife drives|husband drives|it's|its)\s+(?:a\s+)?([a-zA-Z0-9\s]+?)(?:\s(?:and|that|which|it)|$|\.|\,)/gi,
+
+      // Direct vehicle mentions without trigger words
+      vehicle_direct_year_make_model: /(?:^|\s)(\d{4})\s+([a-zA-Z]+)\s+([a-zA-Z]+)(?:\s|$|\.|\,)/gi,
+      vehicle_direct_make_model: /(?:^|\s)([a-zA-Z]+)\s+([a-zA-Z]+)(?:\s|$|\.|\,)(?=.*(?:car|vehicle|drive|driving))/gi,
+
+      // Very specific patterns for common responses
+      vehicle_its_pattern: /(?:it's|its)\s+(?:a\s+)?(\d{4})\s+([a-zA-Z]+)\s+([a-zA-Z]+)/gi,
+      vehicle_standalone_year_make_model: /(\d{4})\s+([a-zA-Z]+)\s+([a-zA-Z]+)/gi,
+      vin: /(?:vin|vehicle identification|vin number)\s*(?:is\s*)?([a-zA-Z0-9]{17})/i,
+      annual_mileage: /(?:drive|miles)\s+(?:about\s+)?(\d+(?:,\d{3})*)\s*(?:miles?\s*)?(?:per year|annually|a year)/i,
+
+      // Vehicle Usage
+      vehicle_use: /(?:use|drive)\s+(?:my car|vehicle|it)\s+(?:for\s+)?(?:mainly\s+)?(commuting|work|business|pleasure|personal)/i,
+      parking: /(?:park|parked)\s+(?:in\s+)?(?:a\s+)?(garage|driveway|street|parking lot)/i,
+
+      // Current Insurance
+      current_insurer: /(?:currently with|insured with|have insurance with)\s+([a-zA-Z\s]+)/i,
+      policy_expires: /(?:policy expires|expires on|renewal date)\s+([a-zA-Z0-9\/\-\s]+)/i,
+
+      // Coverage Preferences
+      coverage_type: /(?:need|want|looking for|interested in)\s+([^.!?]*(?:insurance|coverage|liability|comprehensive|collision)[^.!?]*)/i,
+      deductible: /(?:deductible|deductible of)\s*(?:is\s*)?(\$?\d+)/i,
+
+      // Driving History
+      driving_years: /(?:driving for|been driving|driving experience|driving since)\s+(\d+)\s*(?:years?|yrs?)/i,
+      accidents: /(?:had|been in)\s+(\d+)\s+(?:accident|crash|wreck|collision)s?\s*(?:in the past|in last)?\s*(\d+)?\s*(?:years?)?/i,
+      tickets: /(?:got|received|had)\s+(\d+)\s+(?:ticket|violation|citation)s?\s*(?:in the past|in last)?\s*(\d+)?\s*(?:years?)?/i,
+      claims: /(?:filed|made|had)\s+(\d+)\s+(?:claim|insurance claim)s?\s*(?:in the past|in last)?\s*(\d+)?\s*(?:years?)?/i,
+
+      // Household Information
+      household_drivers: /(?:household has|family has|there are)\s+(\d+)\s+(?:drivers?|people who drive)/i,
+      spouse_name: /(?:spouse|husband|wife)\s+(?:is\s+)?([a-zA-Z\s]+)/i,
+
+      // Financial Information
+      credit_score: /(?:credit score|credit)\s*(?:is\s*)?(?:about\s+)?(\d{3})/i,
+      homeowner: /(?:i\s+)?(own|rent)\s+(?:my\s+)?(?:home|house)/i
+    };
+
+    // Process all patterns
+    Object.entries(patterns).forEach(([key, pattern]) => {
+      // Handle global patterns (for vehicles) differently
+      if (key.startsWith('vehicle_') && pattern.global) {
+        // Use Array.from for better compatibility
+        const matches = Array.from(allText.matchAll(pattern));
+        matches.forEach((match, index) => {
+          console.log(`Found match ${index + 1} for ${key}:`, match);
+          handleVehicleMatch(key, match, data);
+        });
+      } else {
+        const match = allText.match(pattern);
+        if (match) {
+          console.log(`Found match for ${key}:`, match);
+          handleNonVehicleMatch(key, match, data);
+        }
+      }
+    });
+
+    // Helper function to handle vehicle matches
+    function handleVehicleMatch(key: string, match: RegExpMatchArray, data: any) {
+      switch (key) {
+          // Vehicle Information - Support multiple vehicles
+          case 'vehicle_year_make_model':
+            data.extractedInfo.vehicles = data.extractedInfo.vehicles || [];
+            const newVehicle1 = {
+              id: data.extractedInfo.vehicles.length + 1,
+              year: match[1],
+              make: match[2],
+              model: match[3],
+              full: `${match[1]} ${match[2]} ${match[3]}`
+            };
+            // Check if this vehicle already exists
+            const exists1 = data.extractedInfo.vehicles.some((v: any) => v.full === newVehicle1.full);
+            if (!exists1) {
+              data.extractedInfo.vehicles.push(newVehicle1);
+            }
+            // Also keep the single vehicle for backward compatibility
+            if (!data.extractedInfo.vehicle) {
+              data.extractedInfo.vehicle = newVehicle1;
+            }
+            break;
+          case 'vehicle_make_model':
+            data.extractedInfo.vehicles = data.extractedInfo.vehicles || [];
+            const newVehicle2 = {
+              id: data.extractedInfo.vehicles.length + 1,
+              make: match[1],
+              model: match[2],
+              full: `${match[1]} ${match[2]}`
+            };
+            // Check if this vehicle already exists
+            const exists2 = data.extractedInfo.vehicles.some((v: any) => v.full === newVehicle2.full);
+            if (!exists2) {
+              data.extractedInfo.vehicles.push(newVehicle2);
+            }
+            // Also keep the single vehicle for backward compatibility
+            if (!data.extractedInfo.vehicle) {
+              data.extractedInfo.vehicle = newVehicle2;
+            }
+            break;
+          case 'vehicle_simple':
+            data.extractedInfo.vehicles = data.extractedInfo.vehicles || [];
+            const newVehicle3 = {
+              id: data.extractedInfo.vehicles.length + 1,
+              description: match[1].trim(),
+              full: match[1].trim()
+            };
+            // Check if this vehicle already exists
+            const exists3 = data.extractedInfo.vehicles.some((v: any) => v.full === newVehicle3.full);
+            if (!exists3) {
+              data.extractedInfo.vehicles.push(newVehicle3);
+            }
+            // Also keep the single vehicle for backward compatibility
+            if (!data.extractedInfo.vehicle) {
+              data.extractedInfo.vehicle = newVehicle3;
+            }
+            break;
+          case 'vehicle_direct_year_make_model':
+            data.extractedInfo.vehicles = data.extractedInfo.vehicles || [];
+            const newVehicle4 = {
+              id: data.extractedInfo.vehicles.length + 1,
+              year: match[1],
+              make: match[2],
+              model: match[3],
+              full: `${match[1]} ${match[2]} ${match[3]}`
+            };
+            // Check if this vehicle already exists
+            const exists4 = data.extractedInfo.vehicles.some((v: any) => v.full === newVehicle4.full);
+            if (!exists4) {
+              data.extractedInfo.vehicles.push(newVehicle4);
+            }
+            // Also keep the single vehicle for backward compatibility
+            if (!data.extractedInfo.vehicle) {
+              data.extractedInfo.vehicle = newVehicle4;
+            }
+            break;
+          case 'vehicle_direct_make_model':
+            data.extractedInfo.vehicles = data.extractedInfo.vehicles || [];
+            const newVehicle5 = {
+              id: data.extractedInfo.vehicles.length + 1,
+              make: match[1],
+              model: match[2],
+              full: `${match[1]} ${match[2]}`
+            };
+            // Check if this vehicle already exists
+            const exists5 = data.extractedInfo.vehicles.some((v: any) => v.full === newVehicle5.full);
+            if (!exists5) {
+              data.extractedInfo.vehicles.push(newVehicle5);
+            }
+            // Also keep the single vehicle for backward compatibility
+            if (!data.extractedInfo.vehicle) {
+              data.extractedInfo.vehicle = newVehicle5;
+            }
+            break;
+          case 'vehicle_its_pattern':
+            data.extractedInfo.vehicles = data.extractedInfo.vehicles || [];
+            const newVehicle6 = {
+              id: data.extractedInfo.vehicles.length + 1,
+              year: match[1],
+              make: match[2],
+              model: match[3],
+              full: `${match[1]} ${match[2]} ${match[3]}`
+            };
+            // Check if this vehicle already exists
+            const exists6 = data.extractedInfo.vehicles.some((v: any) => v.full === newVehicle6.full);
+            if (!exists6) {
+              data.extractedInfo.vehicles.push(newVehicle6);
+            }
+            // Also keep the single vehicle for backward compatibility
+            if (!data.extractedInfo.vehicle) {
+              data.extractedInfo.vehicle = newVehicle6;
+            }
+            break;
+          case 'vehicle_standalone_year_make_model':
+            data.extractedInfo.vehicles = data.extractedInfo.vehicles || [];
+            const newVehicle7 = {
+              id: data.extractedInfo.vehicles.length + 1,
+              year: match[1],
+              make: match[2],
+              model: match[3],
+              full: `${match[1]} ${match[2]} ${match[3]}`
+            };
+            // Check if this vehicle already exists
+            const exists7 = data.extractedInfo.vehicles.some((v: any) => v.full === newVehicle7.full);
+            if (!exists7) {
+              data.extractedInfo.vehicles.push(newVehicle7);
+            }
+            // Also keep the single vehicle for backward compatibility
+            if (!data.extractedInfo.vehicle) {
+              data.extractedInfo.vehicle = newVehicle7;
+            }
+            break;
+      }
+    }
+
+    // Helper function to handle non-vehicle matches
+    function handleNonVehicleMatch(key: string, match: RegExpMatchArray, data: any) {
+      switch (key) {
+          // Personal Information
+          case 'name':
+            data.extractedInfo.personalInfo = data.extractedInfo.personalInfo || {};
+            data.extractedInfo.personalInfo.name = match[1].trim();
+            break;
+          case 'age':
+            data.extractedInfo.personalInfo = data.extractedInfo.personalInfo || {};
+            data.extractedInfo.personalInfo.age = parseInt(match[1]);
+            break;
+          case 'birth_date':
+            data.extractedInfo.personalInfo = data.extractedInfo.personalInfo || {};
+            data.extractedInfo.personalInfo.birthDate = match[1].trim();
+            break;
+          case 'email':
+            data.extractedInfo.contactInfo = data.extractedInfo.contactInfo || {};
+            data.extractedInfo.contactInfo.email = match[1];
+            break;
+          case 'phone':
+            data.extractedInfo.contactInfo = data.extractedInfo.contactInfo || {};
+            data.extractedInfo.contactInfo.phone = `${match[1]}-${match[2]}-${match[3]}`;
+            break;
+          case 'ssn':
+            data.extractedInfo.personalInfo = data.extractedInfo.personalInfo || {};
+            data.extractedInfo.personalInfo.ssn = match[1];
+            break;
+
+          // Address Information
+          case 'address':
+            data.extractedInfo.address = data.extractedInfo.address || {};
+            data.extractedInfo.address.street = match[1].trim();
+            break;
+          case 'city':
+            data.extractedInfo.address = data.extractedInfo.address || {};
+            data.extractedInfo.address.city = match[1].trim();
+            break;
+          case 'state':
+            data.extractedInfo.address = data.extractedInfo.address || {};
+            data.extractedInfo.address.state = match[1].trim();
+            break;
+          case 'zip_code':
+            data.extractedInfo.address = data.extractedInfo.address || {};
+            data.extractedInfo.address.zipCode = match[1];
+            break;
+
+          // Personal Details
+          case 'marital_status':
+            data.extractedInfo.personalInfo = data.extractedInfo.personalInfo || {};
+            data.extractedInfo.personalInfo.maritalStatus = match[1];
+            break;
+          case 'occupation':
+            data.extractedInfo.personalInfo = data.extractedInfo.personalInfo || {};
+            data.extractedInfo.personalInfo.occupation = match[1].trim();
+            break;
+
+          // Driver's License
+          case 'license_number':
+            data.extractedInfo.license = data.extractedInfo.license || {};
+            data.extractedInfo.license.number = match[1];
+            break;
+          case 'license_state':
+            data.extractedInfo.license = data.extractedInfo.license || {};
+            data.extractedInfo.license.state = match[1].trim();
+            break;
+
+          // VIN and vehicle details (non-pattern based)
+          case 'vin':
+            data.extractedInfo.vehicle = data.extractedInfo.vehicle || {};
+            data.extractedInfo.vehicle.vin = match[1];
+            // Also add to the most recent vehicle in the array
+            if (data.extractedInfo.vehicles && data.extractedInfo.vehicles.length > 0) {
+              data.extractedInfo.vehicles[data.extractedInfo.vehicles.length - 1].vin = match[1];
+            }
+            break;
+          case 'annual_mileage':
+            data.extractedInfo.vehicle = data.extractedInfo.vehicle || {};
+            data.extractedInfo.vehicle.annualMileage = parseInt(match[1].replace(/,/g, ''));
+            // Also add to the most recent vehicle in the array
+            if (data.extractedInfo.vehicles && data.extractedInfo.vehicles.length > 0) {
+              data.extractedInfo.vehicles[data.extractedInfo.vehicles.length - 1].annualMileage = parseInt(match[1].replace(/,/g, ''));
+            }
+            break;
+
+          // Vehicle Usage
+          case 'vehicle_use':
+            data.extractedInfo.vehicle = data.extractedInfo.vehicle || {};
+            data.extractedInfo.vehicle.primaryUse = match[1];
+            // Also add to the most recent vehicle in the array
+            if (data.extractedInfo.vehicles && data.extractedInfo.vehicles.length > 0) {
+              data.extractedInfo.vehicles[data.extractedInfo.vehicles.length - 1].primaryUse = match[1];
+            }
+            break;
+          case 'parking':
+            data.extractedInfo.vehicle = data.extractedInfo.vehicle || {};
+            data.extractedInfo.vehicle.parking = match[1];
+            // Also add to the most recent vehicle in the array
+            if (data.extractedInfo.vehicles && data.extractedInfo.vehicles.length > 0) {
+              data.extractedInfo.vehicles[data.extractedInfo.vehicles.length - 1].parking = match[1];
+            }
+            break;
+
+          // Current Insurance
+          case 'current_insurer':
+            data.extractedInfo.currentInsurance = data.extractedInfo.currentInsurance || {};
+            data.extractedInfo.currentInsurance.company = match[1].trim();
+            break;
+          case 'policy_expires':
+            data.extractedInfo.currentInsurance = data.extractedInfo.currentInsurance || {};
+            data.extractedInfo.currentInsurance.expirationDate = match[1].trim();
+            break;
+
+          // Coverage Preferences
+          case 'coverage_type':
+            data.extractedInfo.coverage = data.extractedInfo.coverage || {};
+            data.extractedInfo.coverage.type = match[1].trim();
+            break;
+          case 'deductible':
+            data.extractedInfo.coverage = data.extractedInfo.coverage || {};
+            data.extractedInfo.coverage.deductible = match[1];
+            break;
+
+          // Driving History
+          case 'driving_years':
+            data.extractedInfo.drivingHistory = data.extractedInfo.drivingHistory || {};
+            data.extractedInfo.drivingHistory.yearsExperience = parseInt(match[1]);
+            break;
+          case 'accidents':
+            data.extractedInfo.drivingHistory = data.extractedInfo.drivingHistory || {};
+            data.extractedInfo.drivingHistory.accidents = {
+              count: parseInt(match[1]),
+              timeframe: match[2] ? `${match[2]} years` : 'unspecified'
+            };
+            break;
+          case 'tickets':
+            data.extractedInfo.drivingHistory = data.extractedInfo.drivingHistory || {};
+            data.extractedInfo.drivingHistory.tickets = {
+              count: parseInt(match[1]),
+              timeframe: match[2] ? `${match[2]} years` : 'unspecified'
+            };
+            break;
+          case 'claims':
+            data.extractedInfo.drivingHistory = data.extractedInfo.drivingHistory || {};
+            data.extractedInfo.drivingHistory.claims = {
+              count: parseInt(match[1]),
+              timeframe: match[2] ? `${match[2]} years` : 'unspecified'
+            };
+            break;
+
+          // Household Information
+          case 'household_drivers':
+            data.extractedInfo.household = data.extractedInfo.household || {};
+            data.extractedInfo.household.totalDrivers = parseInt(match[1]);
+            break;
+          case 'spouse_name':
+            data.extractedInfo.household = data.extractedInfo.household || {};
+            data.extractedInfo.household.spouseName = match[1].trim();
+            break;
+
+          // Financial Information
+          case 'credit_score':
+            data.extractedInfo.financial = data.extractedInfo.financial || {};
+            data.extractedInfo.financial.creditScore = parseInt(match[1]);
+            break;
+          case 'homeowner':
+            data.extractedInfo.financial = data.extractedInfo.financial || {};
+            data.extractedInfo.financial.homeOwnership = match[1];
+            break;
+        }
+      }
+
+    // Message statistics
+    const userMessages = history.filter((item: any) => item.role === 'user').length;
+    const assistantMessages = history.filter((item: any) => item.role === 'assistant').length;
+
+    data.stats = {
+      userMessages,
+      assistantMessages,
+      totalMessages: history.length
+    };
+
+    console.log('Extracted data:', data.extractedInfo);
+    return data;
+  };
+
+  // Extract conversation messages for display
+  const messages = conversationHistory
+    .filter((item: any) => item.type === 'message' || item.role)
+    .map((item: any, index: number) => ({
+      id: index,
+      role: item.role,
+      content: Array.isArray(item.content)
+        ? item.content.map((c: any) => c.text || c.transcript || c).join(' ')
+        : item.content || ''
+    }));
+
+  // Update collected data when conversation changes
+  useEffect(() => {
+    const newData = extractDataFromConversation(conversationHistory);
+    if (Object.keys(newData).length > 0) {
+      newData.lastUpdated = new Date().toLocaleTimeString();
+    }
+    setCollectedData(newData);
+  }, [conversationHistory]);
+
+
 
   return (
     <div className="App">
