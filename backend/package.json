@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.705.0",
+    "@aws-sdk/client-s3": "^3.844.0",
     "@aws-sdk/client-ssm": "^3.705.0",
     "@openai/agents": "^0.0.10",
     "cors": "^2.8.5",
