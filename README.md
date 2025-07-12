@@ -185,41 +185,151 @@ DEBUG=voice-agent:* npm run dev
 - **Audio Quality**: 16kHz PCM with noise suppression
 - **Session Duration**: 30-minute timeout with extension
 
-## 🚀 Deployment
+## 🚀 AWS Deployment
 
-### Production Setup
+This application is designed to be deployed on AWS using S3 for the frontend and Lambda for the backend. The deployment has been **tested and verified** to work with real OpenAI API integration.
 
-1. **Environment Variables**:
+### 📚 Deployment Documentation
+
+- **[Complete Deployment Guide](docs/DEPLOYMENT_GUIDE.md)** - Comprehensive guide for fresh deployments
+- **[Update Guide](docs/UPDATE_GUIDE.md)** - Quick reference for application updates
+- **[Deployment Summary](DEPLOYMENT_SUMMARY.md)** - Technical implementation details
+
+### ✅ Quick Start (Verified)
+
+**One-Command Deployment** - Deploy everything at once:
+
 ```bash
-NODE_ENV=production
-OPENAI_API_KEY=your_production_key
-FRONTEND_URL=https://your-domain.com
+# Clone and navigate to the repository
+git clone https://github.com/kgptapps/insurancevoiceagent.git
+cd insurancevoiceagent
+
+# Set your OpenAI API key (optional - can be set later)
+export OPENAI_API_KEY="your-openai-api-key-here"
+
+# Deploy everything
+./deploy/deploy-all.sh
 ```
 
-2. **Build Frontend**:
+**Validate Deployment**:
 ```bash
-cd frontend
-npm run build
+./deploy/validate-deployment.sh
 ```
 
-3. **Start Production Server**:
+### 📋 Prerequisites
+
+1. **AWS CLI** installed and configured:
+   ```bash
+   aws configure
+   # Enter your AWS Access Key ID, Secret Access Key, Region, and Output format
+   ```
+
+2. **Node.js and npm** installed (version 18+ recommended)
+
+3. **OpenAI API key** from https://platform.openai.com/account/api-keys
+
+### 🔧 Manual Deployment Steps
+
+If you prefer step-by-step deployment:
+
+1. **Deploy Infrastructure & Frontend**:
+   ```bash
+   ./deploy/deploy-frontend.sh
+   ```
+
+2. **Deploy Backend to Lambda**:
+   ```bash
+   ./deploy/deploy-backend.sh
+   ```
+
+3. **Configure OpenAI API Key**:
+   ```bash
+   aws ssm put-parameter \
+       --name "/insurance-voice-agent/openai-api-key" \
+       --value "your-actual-openai-api-key" \
+       --type "SecureString" \
+       --overwrite \
+       --region us-east-1
+   ```
+
+### 🏗️ AWS Architecture
+
+- **Frontend**: React app hosted on S3 with CloudFront CDN
+- **Backend**: Express.js app running on AWS Lambda (Node.js 22.x)
+- **API Gateway**: HTTP API for REST endpoints + WebSocket API for real-time voice
+- **Systems Manager**: Secure encrypted storage for OpenAI API keys
+- **IAM**: Least privilege access roles for all services
+- **CloudWatch**: Automatic logging and monitoring
+
+### 💰 Cost Estimate
+
+- **Monthly Cost**: ~$10-50 for moderate usage
+- **Pay-per-use**: Only charged for actual traffic
+- **Auto-scaling**: Handles traffic spikes automatically
+- **No fixed costs**: Serverless architecture
+
+### 🧪 Testing Your Deployment
+
+After deployment, you'll receive URLs like:
+- **Frontend**: `https://d3angx33rsj63i.cloudfront.net`
+- **API**: `https://your-api-id.execute-api.us-east-1.amazonaws.com/production`
+- **WebSocket**: `wss://your-ws-id.execute-api.us-east-1.amazonaws.com/production`
+
+Test the health endpoint:
 ```bash
+curl https://your-api-id.execute-api.us-east-1.amazonaws.com/production/api/health
+```
+
+### 🔄 Redeployment
+
+To update your deployment:
+
+```bash
+# Frontend only
+./deploy/deploy-frontend.sh
+
+# Backend only
+./deploy/deploy-backend.sh
+
+# Complete redeployment
+./deploy/deploy-all.sh
+```
+
+### 🐛 Troubleshooting
+
+**View Lambda logs**:
+```bash
+aws logs tail /aws/lambda/insurance-voice-agent-backend-production --follow
+```
+
+**Check deployment status**:
+```bash
+./deploy/validate-deployment.sh
+```
+
+**Common issues**:
+1. **Build failures**: Check Node.js version and dependencies
+2. **AWS permissions**: Verify IAM credentials and policies
+3. **CloudFront delays**: Wait 10-15 minutes for global propagation
+4. **API errors**: Check Lambda logs in CloudWatch
+
+### 💻 Local Development
+
+For local development, use the traditional setup:
+
+```bash
+# Backend
 cd backend
+npm install
+npm run dev
+
+# Frontend (in another terminal)
+cd frontend
+npm install
 npm start
 ```
 
-### Docker Deployment
-
-```dockerfile
-# Example Dockerfile for backend
-FROM node:22-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-EXPOSE 3001 3002
-CMD ["npm", "start"]
-```
+The local development environment will use your `.env` file for configuration, while the deployed version uses AWS Systems Manager for secure parameter storage.
 
 ## 📄 License
 

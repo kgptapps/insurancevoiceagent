@@ -5,6 +5,7 @@ import {
   InsuranceApplication,
   CompletionStatus
 } from './types/insurance';
+import { apiUrl } from './config/environment';
 
 function App() {
   const [isConnected, setIsConnected] = useState(false);
@@ -45,7 +46,7 @@ function App() {
 
   // Get session token from backend
   const getSessionToken = async () => {
-    const response = await fetch('http://localhost:3001/api/session-token', {
+    const response = await fetch(`${apiUrl}/api/session-token`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

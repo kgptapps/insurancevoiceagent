@@ -1,11 +1,12 @@
-import { 
-  WebSocketMessage, 
-  SessionStartMessage, 
-  AudioInputMessage, 
+import {
+  WebSocketMessage,
+  SessionStartMessage,
+  AudioInputMessage,
   TextInputMessage,
   InsuranceApplication,
   CompletionStatus
 } from '../types/insurance';
+import { wsUrl } from '../config/environment';
 
 export type WebSocketEventHandler = (data: any) => void;
 
@@ -18,7 +19,7 @@ class WebSocketService {
   private reconnectDelay = 1000;
   private isConnecting = false;
 
-  constructor(url: string = 'ws://localhost:3002') {
+  constructor(url: string = wsUrl) {
     this.url = url;
   }
 

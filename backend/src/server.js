@@ -3,19 +3,44 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import VoiceAgentWebSocketServer from './services/websocketServer.js';
 import sessionManager from './services/sessionManager.js';
+import { getOpenAIApiKey, isLambdaEnvironment, getLambdaContext } from './config/aws.js';
 
 // Load environment variables
 dotenv.config();
 
-// Validate required environment variables
-if (!process.env.OPENAI_API_KEY) {
-  console.error('Error: OPENAI_API_KEY environment variable is required');
-  process.exit(1);
+// Global variable to store OpenAI API key
+let openaiApiKey = null;
+
+// Initialize OpenAI API key
+async function initializeOpenAIKey() {
+  try {
+    openaiApiKey = await getOpenAIApiKey();
+    console.log('OpenAI API key loaded successfully');
+  } catch (error) {
+    console.error('Error loading OpenAI API key:', error.message);
+    if (!isLambdaEnvironment()) {
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+// Initialize the API key on startup (for non-Lambda environments)
+if (!isLambdaEnvironment()) {
+  await initializeOpenAIKey();
 }
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const WS_PORT = process.env.WS_PORT || 3002;
+
+// Helper function to get OpenAI API key (lazy loading for Lambda)
+async function getApiKey() {
+  if (!openaiApiKey) {
+    await initializeOpenAIKey();
+  }
+  return openaiApiKey;
+}
 
 // Middleware
 app.use(cors({
@@ -26,7 +51,8 @@ app.use(express.json());
 
 // Request logging middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  const lambdaContext = getLambdaContext(req);
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path} - RequestId: ${lambdaContext.requestId}`);
   next();
 });
 
@@ -170,10 +196,11 @@ app.get('/api/sessions/:sessionId/history', (req, res) => {
 app.post('/api/session-token', async (req, res) => {
   try {
     console.log('Creating session token with OpenAI...');
+    const apiKey = await getApiKey();
     const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -379,29 +406,34 @@ app.use((req, res) => {
   });
 });
 
-// Initialize WebSocket server
-const wsServer = new VoiceAgentWebSocketServer(WS_PORT);
+// Initialize WebSocket server and start servers only if not in Lambda environment
+if (!isLambdaEnvironment()) {
+  // Initialize WebSocket server
+  const wsServer = new VoiceAgentWebSocketServer(WS_PORT);
 
-// Start servers
-app.listen(PORT, () => {
-  console.log(`Insurance Voice Agent Backend running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
-});
+  // Start servers
+  app.listen(PORT, () => {
+    console.log(`Insurance Voice Agent Backend running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+  });
 
-wsServer.start();
+  wsServer.start();
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM, shutting down gracefully...');
-  wsServer.stop();
-  process.exit(0);
-});
+  // Graceful shutdown
+  process.on('SIGTERM', () => {
+    console.log('Received SIGTERM, shutting down gracefully...');
+    wsServer.stop();
+    process.exit(0);
+  });
 
-process.on('SIGINT', () => {
-  console.log('Received SIGINT, shutting down gracefully...');
-  wsServer.stop();
-  process.exit(0);
-});
+  process.on('SIGINT', () => {
+    console.log('Received SIGINT, shutting down gracefully...');
+    wsServer.stop();
+    process.exit(0);
+  });
+} else {
+  console.log('Running in Lambda environment - skipping server startup');
+}
 
 export default app;

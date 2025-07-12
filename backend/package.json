@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
+    "build": "echo 'No build step required for Node.js'",
+    "package": "zip -r lambda-deployment.zip src/ node_modules/ package.json",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -21,11 +23,14 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.705.0",
+    "@aws-sdk/client-ssm": "^3.705.0",
     "@openai/agents": "^0.0.10",
     "cors": "^2.8.5",
     "dotenv": "^17.1.0",
     "express": "^5.1.0",
     "nodemon": "^3.1.10",
+    "serverless-http": "^3.2.0",
     "uuid": "^11.1.0",
     "ws": "^8.18.3",
     "zod": "^3.25.76"
