@@ -180,30 +180,51 @@ function App() {
         // Create the insurance agent
         const insuranceAgent = new RealtimeAgent({
           name: 'Sarah - Insurance Specialist',
-          instructions: `You are Sarah, a friendly and experienced auto insurance specialist. You have a warm, conversational style and make insurance feel approachable.
+          instructions: `You are Sarah, a friendly and experienced auto insurance specialist specializing in helping customers with renewals, new policies, and adding vehicles. You have a warm, conversational style and make insurance feel approachable.
 
 Your personality:
-- Warm, friendly, and genuinely interested in helping
+- Warm, friendly, and genuinely interested in helping with their specific insurance needs
 - Great at building rapport and making people feel comfortable
 - Excellent at explaining complex insurance concepts in simple terms
 - Patient and never pushy - you let conversations flow naturally
-- Professional but personable
+- Professional but personable, with a focus on cost savings and value
+
+CRITICAL FIRST PRIORITY - Insurance Purpose:
+After your greeting, IMMEDIATELY ask about their insurance purpose. This is the most important information:
+- "Are you looking to renew your current policy?"
+- "Do you need a brand new insurance policy?"
+- "Are you adding a car to your existing coverage?"
+- "Are you trying to lower your current premium?"
+- "Are you removing a vehicle from your policy?"
+
+Emphasize benefits based on their purpose:
+- RENEWAL: "Great! I can help you find better rates and coverage for your renewal"
+- NEW POLICY: "Perfect! Let's get you set up with comprehensive coverage at a great price"
+- ADDING CAR: "Excellent! Adding a vehicle often comes with multi-car discounts"
+- LOWERING PREMIUM: "I love helping people save money! Let's find ways to reduce your costs"
 
 Your conversational approach:
-- Start with a warm greeting and ask how their day is going
-- Show genuine interest in their situation and needs
-- Use natural conversation flow - don't just ask questions in sequence
-- Share relevant insights and tips that show your expertise
+1. Start with warm greeting
+2. IMMEDIATELY ask about insurance purpose (renewal/new/adding car/lowering premium)
+3. Show enthusiasm about helping with their specific need
+4. Then naturally collect other information
+5. Emphasize cost savings and value throughout
 
 Information you need to collect naturally through conversation:
+- INSURANCE PURPOSE (renewal, new policy, adding car, lowering premium) - ASK FIRST!
+- Current insurance company and expiration date (if renewal)
 - Personal details (name, age, address, contact info)
-- Vehicle information (make, model, year, usage)
+- Vehicle information (make, model, year, usage) - up to 2 vehicles
 - Driving history and experience
 - Coverage preferences and budget
 
-Start with: "Hi there! I'm Sarah, and I'm here to help you find the perfect auto insurance coverage. How's your day going so far?"
+IMPORTANT: You should START the conversation immediately when connected. Don't wait for the customer to speak first!
 
-Remember: This should feel like a natural conversation with a helpful expert, not an interrogation.`,
+Start with: "Hi there! I'm Sarah, and I'm here to help you with your auto insurance needs. How's your day going? And tell me, are you looking to renew your current policy, get a brand new one, or maybe add a car to your existing coverage?"
+
+Remember:
+- START TALKING FIRST - don't wait for the customer
+- ALWAYS ask about their insurance purpose first - this drives the entire conversation and helps you provide the most relevant assistance!`,
         });
 
         sessionRef.current = new RealtimeSession(insuranceAgent, {
@@ -307,7 +328,19 @@ Remember: This should feel like a natural conversation with a helpful expert, no
 
         console.log('Successfully connected to OpenAI!');
         setIsConnected(true);
-        setStatus('Connected! You can now speak.');
+        setStatus('Connected! Sarah is greeting you...');
+
+        // Automatically start the conversation with Sarah's greeting
+        setTimeout(async () => {
+          try {
+            console.log('🎤 Starting conversation with automatic greeting...');
+            await sessionRef.current.sendMessage("Please start the conversation with your greeting and ask about the customer's insurance purpose.");
+            setStatus('🎙️ Sarah is speaking! Listen and then respond naturally.');
+          } catch (error) {
+            console.error('Error sending initial message:', error);
+            setStatus('Connected! You can now speak.');
+          }
+        }, 1000); // Wait 1 second for connection to stabilize
 
       } catch (error) {
         console.error('Connection error:', error);
@@ -336,6 +369,13 @@ Remember: This should feel like a natural conversation with a helpful expert, no
 
     // Extract comprehensive insurance information using improved patterns
     const patterns = {
+      // INSURANCE PURPOSE - HIGHEST PRIORITY
+      insurance_purpose_renewal: /(?:looking to renew|want to renew|need to renew|renewing|renewal|my policy expires|policy is expiring|current policy|existing policy)/i,
+      insurance_purpose_new: /(?:need new|want new|looking for new|new policy|new insurance|first time|never had|don't have|no insurance|new coverage)/i,
+      insurance_purpose_adding_car: /(?:adding a car|add a car|adding vehicle|add vehicle|second car|another car|additional car|new car|just bought|recently purchased)/i,
+      insurance_purpose_lowering_premium: /(?:lower|reduce|cheaper|save money|cut costs|better rate|lower premium|less expensive|find savings)/i,
+      insurance_purpose_removing_car: /(?:removing|remove|taking off|sold|getting rid of|no longer have|don't need)/i,
+
       // Personal Information
       name: /(?:name is|i'm|my name is|call me|hi i'm|hello i'm)\s+([a-zA-Z\s]+?)(?:\s|$|\.|\,)/i,
       age: /(?:age is|i'm|years old|age|born in)\s+(\d+)/i,
@@ -558,6 +598,38 @@ Remember: This should feel like a natural conversation with a helpful expert, no
     // Helper function to handle non-vehicle matches
     function handleNonVehicleMatch(key: string, match: RegExpMatchArray, data: any) {
       switch (key) {
+          // INSURANCE PURPOSE - HIGHEST PRIORITY
+          case 'insurance_purpose_renewal':
+            data.extractedInfo.insurancePurpose = data.extractedInfo.insurancePurpose || {};
+            data.extractedInfo.insurancePurpose.type = 'renewal';
+            data.extractedInfo.insurancePurpose.description = 'Customer wants to renew their current policy';
+            data.extractedInfo.insurancePurpose.priority = 'HIGH';
+            break;
+          case 'insurance_purpose_new':
+            data.extractedInfo.insurancePurpose = data.extractedInfo.insurancePurpose || {};
+            data.extractedInfo.insurancePurpose.type = 'new_policy';
+            data.extractedInfo.insurancePurpose.description = 'Customer needs a new insurance policy';
+            data.extractedInfo.insurancePurpose.priority = 'HIGH';
+            break;
+          case 'insurance_purpose_adding_car':
+            data.extractedInfo.insurancePurpose = data.extractedInfo.insurancePurpose || {};
+            data.extractedInfo.insurancePurpose.type = 'adding_car';
+            data.extractedInfo.insurancePurpose.description = 'Customer wants to add a car to existing policy';
+            data.extractedInfo.insurancePurpose.priority = 'HIGH';
+            break;
+          case 'insurance_purpose_lowering_premium':
+            data.extractedInfo.insurancePurpose = data.extractedInfo.insurancePurpose || {};
+            data.extractedInfo.insurancePurpose.type = 'lowering_premium';
+            data.extractedInfo.insurancePurpose.description = 'Customer wants to reduce their insurance costs';
+            data.extractedInfo.insurancePurpose.priority = 'HIGH';
+            break;
+          case 'insurance_purpose_removing_car':
+            data.extractedInfo.insurancePurpose = data.extractedInfo.insurancePurpose || {};
+            data.extractedInfo.insurancePurpose.type = 'removing_car';
+            data.extractedInfo.insurancePurpose.description = 'Customer wants to remove a car from policy';
+            data.extractedInfo.insurancePurpose.priority = 'HIGH';
+            break;
+
           // Personal Information
           case 'name':
             data.extractedInfo.personalInfo = data.extractedInfo.personalInfo || {};

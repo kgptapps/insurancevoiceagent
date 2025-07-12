@@ -1,0 +1,307 @@
+.json-viewer {
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  margin: 16px 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.json-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #333;
+  border-radius: 8px 8px 0 0;
+}
+
+.json-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.json-title h4 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.json-type {
+  background: #007acc;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.collapse-btn {
+  background: none;
+  border: none;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.collapse-btn:hover {
+  background: #404040;
+}
+
+.json-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.copy-btn {
+  background: #007acc;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.copy-btn:hover {
+  background: #005a9e;
+}
+
+.copy-btn.copied {
+  background: #28a745;
+}
+
+.json-content {
+  padding: 16px;
+  overflow: auto;
+  background: #1e1e1e;
+  border-radius: 0 0 8px 8px;
+}
+
+.json-formatted {
+  padding: 16px;
+  color: #d4d4d4;
+  text-align: left;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.json-raw {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: #d4d4d4;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+}
+
+/* JSON Syntax Highlighting */
+.json-key {
+  color: #79c0ff;
+  font-weight: 600;
+}
+
+.json-string {
+  color: #a5d6ff;
+}
+
+.json-string.json-email {
+  color: #00d4ff;
+  text-decoration: underline;
+  font-weight: 600;
+}
+
+.json-string.json-zipcode {
+  color: #7ee787;
+  font-weight: 700;
+}
+
+.json-string.json-phone {
+  color: #ffa657;
+  font-weight: 600;
+}
+
+.json-string.json-vehicle {
+  color: #d2a8ff;
+  font-weight: 700;
+}
+
+.json-string.json-year {
+  color: #58a6ff;
+  font-weight: 700;
+}
+
+.json-number {
+  color: #79c0ff;
+  font-weight: 600;
+}
+
+.json-boolean {
+  color: #ff7b72;
+  font-weight: 700;
+}
+
+.json-null {
+  color: #ff7b72;
+  font-style: italic;
+  font-weight: 600;
+}
+
+.json-bracket,
+.json-brace {
+  color: #ffa657;
+  font-weight: bold;
+  font-size: 16px;
+}
+
+.json-colon {
+  color: #e6edf3;
+  margin: 0 4px;
+  font-weight: 600;
+}
+
+.json-comma {
+  color: #e6edf3;
+  font-weight: 600;
+}
+
+/* Object and Array Formatting */
+.json-object,
+.json-array {
+  display: block;
+}
+
+.json-object-content,
+.json-array-content {
+  margin-left: 20px;
+  border-left: 1px solid #333;
+  padding-left: 12px;
+}
+
+.json-property,
+.json-array-item {
+  margin: 4px 0;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.json-property .json-object,
+.json-property .json-array,
+.json-array-item .json-object,
+.json-array-item .json-array {
+  margin-left: 0;
+  flex: 1;
+}
+
+/* Special Insurance Data Highlighting */
+.json-viewer .json-property:has(.json-email) {
+  background: rgba(79, 195, 247, 0.1);
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: 2px 0;
+}
+
+.json-viewer .json-property:has(.json-vehicle) {
+  background: rgba(186, 104, 200, 0.1);
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: 2px 0;
+}
+
+.json-viewer .json-property:has(.json-zipcode) {
+  background: rgba(129, 199, 132, 0.1);
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: 2px 0;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .json-viewer {
+    font-size: 12px;
+  }
+  
+  .json-header {
+    padding: 8px 12px;
+  }
+  
+  .json-content {
+    padding: 12px;
+  }
+  
+  .json-object-content,
+  .json-array-content {
+    margin-left: 12px;
+    padding-left: 8px;
+  }
+}
+
+/* Dark Theme Enhancements */
+.json-viewer {
+  box-shadow: 
+    0 4px 6px rgba(0, 0, 0, 0.3),
+    0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.json-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.json-content::-webkit-scrollbar-track {
+  background: #2d2d2d;
+  border-radius: 4px;
+}
+
+.json-content::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+
+.json-content::-webkit-scrollbar-thumb:hover {
+  background: #777;
+}
+
+/* No Data State */
+.no-data {
+  color: #888;
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+  margin: 0;
+}
+
+/* Animation for expand/collapse */
+.json-content {
+  transition: max-height 0.3s ease-in-out;
+}
+
+/* Hover effects for better UX */
+.json-property:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: 2px 0;
+}
+
+.json-array-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: 2px 0;
+}
