@@ -151,165 +151,7 @@ class ConversationLogger {
     return state;
   }
 
-  /**
-   * Extract insurance-related information from conversation content
-   * Format data according to QuoteWizard structure
-   */
-  extractInsuranceData(content, insuranceData) {
-    const text = typeof content === 'string' ? content : JSON.stringify(content);
 
-    // Initialize QuoteWizard-compatible structure if not exists
-    if (!insuranceData.contact) insuranceData.contact = {};
-    if (!insuranceData.coverage) insuranceData.coverage = {};
-    if (!insuranceData.vehicle) insuranceData.vehicle = [];
-    if (!insuranceData.driver) insuranceData.driver = [];
-
-    // Extract specific insurance fields based on QuoteWizard format
-    const patterns = {
-      // Contact information
-      zipCode: /(?:zip|postal|zip code).*?(\d{5})/i,
-      firstName: /(?:first name|my name is).*?([a-zA-Z]+)/i,
-      lastName: /(?:last name|surname).*?([a-zA-Z]+)/i,
-      email: /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i,
-      phoneNumber: /(?:phone|number|call me).*?(\d{3}[-.]?\d{3}[-.]?\d{4})/i,
-      streetAddress: /(?:address|live at|street).*?(\d+\s+[a-zA-Z0-9\s,]+)/i,
-
-      // Demographics
-      gender: /(?:gender|i am|i'm).*?(male|female|non-binary|man|woman)/i,
-      maritalStatus: /(?:married|single|spouse|husband|wife)/i,
-      homeOwnership: /(?:own|rent|homeowner|renter).*?(home|house)/i,
-      militaryService: /(?:military|veteran|active duty|discharged)/i,
-      birthDate: /(?:birth|born|birthday).*?(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})/i,
-
-      // Insurance history
-      hasInsurance30Days: /(?:insurance for|had insurance).*?(30 days|month|yes|no)/i,
-      formerInsurer: /(?:current|previous|former).*?insurance.*?(allstate|state farm|geico|progressive|nationwide|farmers|liberty mutual|usaa)/i,
-
-      // Vehicle information
-      vehicleCount: /(?:how many vehicles|number of vehicles).*?(\d+)/i,
-      vehicleYear: /(?:year|model year).*?(\d{4})/i,
-      vehicleMake: /(?:make|manufacturer).*?([a-zA-Z]+)/i,
-      vehicleModel: /(?:model).*?([a-zA-Z0-9\s]+)/i,
-
-      // Insurance needs
-      insuranceNeed: /(?:looking for|need|want).*?(new|renewal|adding|removing|lower|cheaper)/i
-    };
-
-    for (const [field, pattern] of Object.entries(patterns)) {
-      const match = text.match(pattern);
-      if (match) {
-        let value = match[1];
-
-        // Map to QuoteWizard structure
-        switch (field) {
-          case 'zipCode':
-            insuranceData.contact.zip_code = value;
-            break;
-          case 'firstName':
-            insuranceData.contact.first_name = value;
-            break;
-          case 'lastName':
-            insuranceData.contact.last_name = value;
-            break;
-          case 'email':
-            insuranceData.contact.email = value;
-            break;
-          case 'phoneNumber':
-            insuranceData.contact.primary_phone = value;
-            break;
-          case 'streetAddress':
-            insuranceData.contact.address = value;
-            break;
-          case 'gender':
-            value = value.toLowerCase();
-            if (value.includes('male') && !value.includes('female')) value = 'male';
-            else if (value.includes('female')) value = 'female';
-            else if (value.includes('non-binary')) value = 'non-binary';
-            insuranceData.contact.gender = value;
-            break;
-          case 'maritalStatus':
-            value = value.toLowerCase().includes('married') ? 'MARRIED' : 'SINGLE';
-            insuranceData.contact.marital_status = value;
-            break;
-          case 'homeOwnership':
-            value = value.toLowerCase().includes('own') ? 'own' : 'rent';
-            insuranceData.contact.own_or_rent = value;
-            break;
-          case 'militaryService':
-            insuranceData.contact.military_experience = value.toLowerCase().includes('yes') ||
-              value.toLowerCase().includes('veteran') ||
-              value.toLowerCase().includes('active') ? 'yes' : 'no';
-            break;
-          case 'birthDate':
-            insuranceData.contact.birthdate = value;
-            break;
-          case 'hasInsurance30Days':
-            insuranceData.coverage.has_coverage = value.toLowerCase().includes('yes') ||
-              value.toLowerCase().includes('30') ||
-              value.toLowerCase().includes('month') ? 'YES' : 'NO';
-            break;
-          case 'formerInsurer':
-            insuranceData.coverage.former_insurer = value.toUpperCase();
-            insuranceData.coverage.former_insurer_name = value;
-            break;
-          case 'vehicleCount':
-            insuranceData.numVehicles = parseInt(value);
-            break;
-          case 'insuranceNeed':
-            insuranceData.insuranceNeed = value.toLowerCase();
-            break;
-        }
-      }
-    }
-
-    // Extract from tool call results and map to QuoteWizard structure
-    if (typeof content === 'object') {
-      if (content.vehicleInfo) {
-        const vehicle = {
-          year: parseInt(content.vehicleInfo.year),
-          make: content.vehicleInfo.make.toUpperCase(),
-          model: content.vehicleInfo.model.toUpperCase(),
-          curatedModel: content.vehicleInfo.model,
-          curatedTrim: content.vehicleInfo.trim || 'Base',
-          vehicleTypeCode: 'P' // Default to passenger vehicle
-        };
-
-        // Add or update vehicle in array
-        const vehicleIndex = (content.vehicleInfo.vehicleNumber || 1) - 1;
-        insuranceData.vehicle[vehicleIndex] = vehicle;
-      }
-
-      if (content.personalInfo) {
-        Object.assign(insuranceData.contact, {
-          first_name: content.personalInfo.firstName,
-          last_name: content.personalInfo.lastName,
-          email: content.personalInfo.email,
-          primary_phone: content.personalInfo.phone,
-          address: content.personalInfo.streetAddress,
-          zip_code: content.personalInfo.zipCode,
-          birthdate: content.personalInfo.birthDate,
-          gender: content.personalInfo.gender,
-          marital_status: content.personalInfo.maritalStatus === 'married' ? 'MARRIED' : 'SINGLE',
-          own_or_rent: content.personalInfo.homeOwnership,
-          military_experience: content.personalInfo.militaryService
-        });
-
-        if (content.personalInfo.hasInsurance30Days !== undefined) {
-          insuranceData.coverage.has_coverage = content.personalInfo.hasInsurance30Days ? 'YES' : 'NO';
-        }
-      }
-
-      if (content.needType) {
-        insuranceData.insuranceNeed = content.needType;
-        insuranceData.currentInsurer = content.currentInsurer;
-        insuranceData.currentPremium = content.currentPremium;
-      }
-    }
-
-    // Set product type
-    insuranceData.product = 'auto';
-    insuranceData.industry = 'insurance';
-  }
 
   /**
    * Sanitize history to remove sensitive data if needed
@@ -417,13 +259,7 @@ class ConversationLogger {
       await fs.writeFile(summaryFile, JSON.stringify(summary, null, 2));
       results.summaryFile = { path: summaryFile };
 
-      // 3. Save extracted insurance data
-      const insuranceData = this.extractInsuranceDataFromConversation(conversation);
-      if (Object.keys(insuranceData).length > 0) {
-        const insuranceFile = path.join(sessionDir, `${conversationId}_insurance_data.json`);
-        await fs.writeFile(insuranceFile, JSON.stringify(insuranceData, null, 2));
-        results.insuranceDataFile = { path: insuranceFile };
-      }
+
 
       console.log(`💾 Conversation saved locally: ${sessionDir}`);
       return results;
@@ -482,22 +318,7 @@ class ConversationLogger {
         url: `s3://${this.bucketName}/${summaryKey}`
       };
 
-      // 3. Save extracted insurance data
-      const insuranceData = this.extractInsuranceDataFromConversation(conversation);
-      if (Object.keys(insuranceData).length > 0) {
-        const insuranceKey = `conversations/${datePrefix}/${sessionId}/${conversationId}_insurance_data.json`;
-        
-        await this.uploadToS3(
-          insuranceKey,
-          Buffer.from(JSON.stringify(insuranceData, null, 2)),
-          'application/json'
-        );
-        
-        results.insuranceDataFile = {
-          key: insuranceKey,
-          url: `s3://${this.bucketName}/${insuranceKey}`
-        };
-      }
+
 
       return results;
       
@@ -556,26 +377,7 @@ class ConversationLogger {
     };
   }
 
-  /**
-   * Extract insurance data from entire conversation
-   */
-  extractInsuranceDataFromConversation(conversation) {
-    const insuranceData = {};
-    
-    // Aggregate insurance data from all history snapshots
-    for (const snapshot of conversation.historySnapshots) {
-      if (snapshot.conversationState && snapshot.conversationState.insuranceData) {
-        Object.assign(insuranceData, snapshot.conversationState.insuranceData);
-      }
-    }
-    
-    return {
-      ...insuranceData,
-      extractedAt: new Date().toISOString(),
-      conversationId: conversation.conversationId,
-      sessionId: conversation.sessionId
-    };
-  }
+
 
   /**
    * Calculate duration between two timestamps
