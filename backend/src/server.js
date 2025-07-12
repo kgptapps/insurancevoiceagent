@@ -4,6 +4,9 @@ import dotenv from 'dotenv';
 import VoiceAgentWebSocketServer from './services/websocketServer.js';
 import sessionManager from './services/sessionManager.js';
 import { getOpenAIApiKey, isLambdaEnvironment, getLambdaContext } from './config/aws.js';
+import conversationLogger from './services/conversationLogger.js';
+import fs from 'fs/promises';
+import path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -389,6 +392,99 @@ app.get('/api/admin/sessions', (req, res) => {
   }
 });
 
+// Conversation History endpoints
+app.get('/api/conversations', async (req, res) => {
+  try {
+    const conversations = await getConversationList();
+    res.json({
+      success: true,
+      conversations,
+      totalCount: conversations.length
+    });
+  } catch (error) {
+    console.error('Error retrieving conversations:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/conversations/:conversationId', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const conversation = await getConversationDetails(conversationId);
+
+    if (!conversation) {
+      return res.status(404).json({
+        success: false,
+        error: 'Conversation not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      conversation
+    });
+  } catch (error) {
+    console.error('Error retrieving conversation details:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/conversations/:conversationId/summary', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const summary = await getConversationSummary(conversationId);
+
+    if (!summary) {
+      return res.status(404).json({
+        success: false,
+        error: 'Conversation summary not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      summary
+    });
+  } catch (error) {
+    console.error('Error retrieving conversation summary:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/conversations/:conversationId/insurance-data', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const insuranceData = await getConversationInsuranceData(conversationId);
+
+    if (!insuranceData) {
+      return res.status(404).json({
+        success: false,
+        error: 'Insurance data not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      insuranceData
+    });
+  } catch (error) {
+    console.error('Error retrieving insurance data:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Unhandled error:', error);
@@ -434,6 +530,125 @@ if (!isLambdaEnvironment()) {
   });
 } else {
   console.log('Running in Lambda environment - skipping server startup');
+}
+
+// Helper functions for conversation history
+async function getConversationList() {
+  const conversations = [];
+  const localStorageDir = './local-conversations';
+
+  try {
+    // Check if local storage directory exists
+    await fs.access(localStorageDir);
+
+    // Read all date directories
+    const dateDirs = await fs.readdir(localStorageDir);
+
+    for (const dateDir of dateDirs) {
+      const datePath = path.join(localStorageDir, dateDir);
+      const stat = await fs.stat(datePath);
+
+      if (stat.isDirectory()) {
+        // Read all session directories for this date
+        const sessionDirs = await fs.readdir(datePath);
+
+        for (const sessionDir of sessionDirs) {
+          const sessionPath = path.join(datePath, sessionDir);
+          const sessionStat = await fs.stat(sessionPath);
+
+          if (sessionStat.isDirectory()) {
+            // Look for conversation files in this session
+            const files = await fs.readdir(sessionPath);
+            const conversationFiles = files.filter(f => f.endsWith('_conversation.json'));
+
+            for (const conversationFile of conversationFiles) {
+              const conversationPath = path.join(sessionPath, conversationFile);
+              const conversationId = conversationFile.replace('_conversation.json', '');
+
+              // Read basic conversation info
+              try {
+                const conversationData = JSON.parse(await fs.readFile(conversationPath, 'utf8'));
+                conversations.push({
+                  conversationId: conversationData.conversationId,
+                  sessionId: conversationData.sessionId,
+                  startTime: conversationData.startTime,
+                  endTime: conversationData.endTime,
+                  duration: conversationData.metadata?.duration,
+                  totalEvents: conversationData.events?.length || 0,
+                  totalSnapshots: conversationData.historySnapshots?.length || 0,
+                  date: dateDir,
+                  filePath: conversationPath
+                });
+              } catch (error) {
+                console.error(`Error reading conversation file ${conversationPath}:`, error);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Sort by start time (newest first)
+    conversations.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+
+  } catch (error) {
+    console.error('Error reading conversation list:', error);
+  }
+
+  return conversations;
+}
+
+async function getConversationDetails(conversationId) {
+  const conversations = await getConversationList();
+  const conversation = conversations.find(c => c.conversationId === conversationId);
+
+  if (!conversation) {
+    return null;
+  }
+
+  try {
+    const conversationData = JSON.parse(await fs.readFile(conversation.filePath, 'utf8'));
+    return conversationData;
+  } catch (error) {
+    console.error(`Error reading conversation details for ${conversationId}:`, error);
+    return null;
+  }
+}
+
+async function getConversationSummary(conversationId) {
+  const conversations = await getConversationList();
+  const conversation = conversations.find(c => c.conversationId === conversationId);
+
+  if (!conversation) {
+    return null;
+  }
+
+  try {
+    const summaryPath = conversation.filePath.replace('_conversation.json', '_summary.json');
+    const summaryData = JSON.parse(await fs.readFile(summaryPath, 'utf8'));
+    return summaryData;
+  } catch (error) {
+    console.error(`Error reading conversation summary for ${conversationId}:`, error);
+    return null;
+  }
+}
+
+async function getConversationInsuranceData(conversationId) {
+  const conversations = await getConversationList();
+  const conversation = conversations.find(c => c.conversationId === conversationId);
+
+  if (!conversation) {
+    return null;
+  }
+
+  try {
+    const insurancePath = conversation.filePath.replace('_conversation.json', '_insurance_data.json');
+    const insuranceData = JSON.parse(await fs.readFile(insurancePath, 'utf8'));
+    return insuranceData;
+  } catch (error) {
+    console.error(`Error reading insurance data for ${conversationId}:`, error);
+    return null;
+  }
 }
 
 export default app;

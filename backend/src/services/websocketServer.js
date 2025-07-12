@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 import { RealtimeSession } from '@openai/agents/realtime';
 import sessionManager from './sessionManager.js';
 import insuranceAgent from '../agents/insuranceAgent.js';
+import realtimeSessionLogger from './realtimeSessionLogger.js';
 
 class VoiceAgentWebSocketServer {
   constructor(port = 3002) {
@@ -47,15 +48,25 @@ class VoiceAgentWebSocketServer {
 
       ws.on('close', () => {
         console.log('WebSocket connection closed');
-        if (sessionId && realtimeSession) {
-          this.cleanup(sessionId, realtimeSession);
+        const sessionData = this.activeSessions.get(ws);
+        if (sessionData) {
+          console.log(`Cleaning up session ${sessionData.sessionId} on connection close`);
+          this.cleanup(sessionData.sessionId, sessionData.realtimeSession).catch(error => {
+            console.error('Error during cleanup on close:', error);
+          });
+          this.activeSessions.delete(ws);
         }
       });
 
       ws.on('error', (error) => {
         console.error('WebSocket connection error:', error);
-        if (sessionId && realtimeSession) {
-          this.cleanup(sessionId, realtimeSession);
+        const sessionData = this.activeSessions.get(ws);
+        if (sessionData) {
+          console.log(`Cleaning up session ${sessionData.sessionId} on connection error`);
+          this.cleanup(sessionData.sessionId, sessionData.realtimeSession).catch(cleanupError => {
+            console.error('Error during cleanup on error:', cleanupError);
+          });
+          this.activeSessions.delete(ws);
         }
       });
 
@@ -109,7 +120,11 @@ class VoiceAgentWebSocketServer {
         case 'session:status':
           await this.handleSessionStatus(ws, payload);
           break;
-          
+
+        case 'test:message':
+          await this.handleTestMessage(ws, payload);
+          break;
+
         default:
           console.warn('Unknown message type:', type);
           this.sendError(ws, `Unknown message type: ${type}`);
@@ -162,6 +177,16 @@ class VoiceAgentWebSocketServer {
         }
       });
       console.log('RealtimeSession created successfully');
+
+      // Setup conversation logging
+      console.log('Setting up conversation logging...');
+      realtimeSessionLogger.setupSessionLogging(realtimeSession, session.id, {
+        userAgent: 'WebSocket Client',
+        ipAddress: ws._socket?.remoteAddress || 'unknown',
+        sessionType: 'voice_call',
+        timestamp: new Date().toISOString()
+      });
+      console.log('Conversation logging setup complete');
 
       // Set up RealtimeSession event handlers
       this.setupRealtimeSessionHandlers(ws, realtimeSession, session.id);
@@ -240,6 +265,149 @@ class VoiceAgentWebSocketServer {
       });
     } catch (error) {
       console.error('Error processing audio output:', error);
+    }
+  }
+
+  handleConversationItemCreated(ws, sessionId, item) {
+    console.log(`📝 Conversation item created for session ${sessionId}:`, item);
+
+    // Add to session conversation history
+    if (item.type === 'message') {
+      sessionManager.addConversationItem(
+        sessionId,
+        item.role || 'unknown',
+        this.extractContentFromItem(item),
+        {
+          event: 'conversation_item_created',
+          itemId: item.id,
+          itemType: item.type,
+          timestamp: new Date().toISOString()
+        }
+      );
+
+      // Send to frontend
+      this.sendMessage(ws, {
+        type: item.role === 'user' ? 'user:message' : 'agent:message',
+        payload: {
+          sessionId,
+          content: this.extractContentFromItem(item),
+          itemId: item.id,
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+  }
+
+  handleUserTranscript(ws, sessionId, transcript, itemId) {
+    console.log(`🎤 User transcript for session ${sessionId}:`, transcript);
+
+    // Add to session conversation history
+    sessionManager.addConversationItem(
+      sessionId,
+      'user',
+      transcript,
+      {
+        event: 'user_transcript_completed',
+        itemId: itemId,
+        timestamp: new Date().toISOString()
+      }
+    );
+
+    // Send to frontend
+    this.sendMessage(ws, {
+      type: 'user:transcript',
+      payload: {
+        sessionId,
+        transcript: transcript,
+        itemId: itemId,
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+
+  handleResponseDone(ws, sessionId, response) {
+    console.log(`✅ Response completed for session ${sessionId}:`, response);
+
+    // Extract assistant message from response output
+    if (response.output && response.output.length > 0) {
+      for (const output of response.output) {
+        if (output.type === 'message' && output.role === 'assistant') {
+          const content = this.extractContentFromItem(output);
+
+          // Add to session conversation history
+          sessionManager.addConversationItem(
+            sessionId,
+            'assistant',
+            content,
+            {
+              event: 'response_done',
+              responseId: response.id,
+              outputId: output.id,
+              timestamp: new Date().toISOString()
+            }
+          );
+
+          // Send to frontend
+          this.sendMessage(ws, {
+            type: 'agent:response',
+            payload: {
+              sessionId,
+              message: content,
+              responseId: response.id,
+              timestamp: new Date().toISOString()
+            }
+          });
+        }
+      }
+    }
+  }
+
+  extractContentFromItem(item) {
+    if (!item.content) return '';
+
+    if (Array.isArray(item.content)) {
+      return item.content
+        .filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join(' ');
+    }
+
+    if (typeof item.content === 'string') {
+      return item.content;
+    }
+
+    if (item.content.text) {
+      return item.content.text;
+    }
+
+    return JSON.stringify(item.content);
+  }
+
+  async handleTestMessage(ws, payload) {
+    const { sessionId, message } = payload;
+    console.log(`📝 Test message for session ${sessionId}: ${message}`);
+
+    try {
+      const session = this.activeSessions.get(sessionId);
+      if (!session) {
+        console.error('Session not found for test message:', sessionId);
+        return;
+      }
+
+      const { realtimeSession } = session;
+      if (!realtimeSession) {
+        console.error('RealtimeSession not found for test message:', sessionId);
+        return;
+      }
+
+      // Send a text message to OpenAI to trigger conversation events
+      console.log('Sending test message to OpenAI...');
+      await realtimeSession.sendUserMessage(message);
+      console.log('Test message sent successfully');
+
+    } catch (error) {
+      console.error('Error handling test message:', error);
+      this.sendError(ws, `Failed to send test message: ${error.message}`);
     }
   }
 
@@ -323,6 +491,24 @@ class VoiceAgentWebSocketServer {
       if (event.type === 'response.audio.delta' && event.delta) {
         console.log('Found audio delta in response.audio.delta event');
         this.handleAudioOutput(ws, sessionId, event.delta);
+      }
+
+      // Handle conversation events for history extraction
+      if (event.type === 'conversation.item.created') {
+        console.log('📝 Conversation item created:', event.item);
+        this.handleConversationItemCreated(ws, sessionId, event.item);
+      }
+
+      // Handle user input transcription
+      if (event.type === 'conversation.item.input_audio_transcription.completed') {
+        console.log('🎤 User transcript completed:', event.transcript);
+        this.handleUserTranscript(ws, sessionId, event.transcript, event.item_id);
+      }
+
+      // Handle response completion with full content
+      if (event.type === 'response.done') {
+        console.log('✅ Response completed:', event.response);
+        this.handleResponseDone(ws, sessionId, event.response);
       }
 
       // Handle any other audio-related events
@@ -526,12 +712,20 @@ class VoiceAgentWebSocketServer {
     const { realtimeSession, sessionId } = sessionData;
 
     try {
+      // End conversation logging
+      console.log('Ending conversation logging...');
+      await realtimeSessionLogger.endSessionLogging(sessionId, {
+        endReason: 'user_ended',
+        status: 'completed'
+      });
+      console.log('Conversation logging ended successfully');
+
       // Disconnect RealtimeSession
       await realtimeSession.disconnect();
-      
+
       // Update session status
       sessionManager.updateSession(sessionId, { status: 'completed' });
-      
+
       // Clean up
       this.activeSessions.delete(ws);
 
@@ -592,27 +786,60 @@ class VoiceAgentWebSocketServer {
     });
   }
 
-  cleanup(sessionId, realtimeSession) {
+  async cleanup(sessionId, realtimeSession) {
     try {
+      console.log(`Starting cleanup for session: ${sessionId}`);
+
+      // End conversation logging and wait for it to complete
+      try {
+        const result = await realtimeSessionLogger.endSessionLogging(sessionId, {
+          endReason: 'connection_closed',
+          status: 'completed'
+        });
+        console.log(`Conversation logging ended successfully for session ${sessionId}:`, result);
+      } catch (error) {
+        console.error('Error ending conversation logging during cleanup:', error);
+      }
+
       // Disconnect RealtimeSession
-      realtimeSession.disconnect();
-      
+      if (realtimeSession) {
+        try {
+          await realtimeSession.disconnect();
+          console.log(`RealtimeSession disconnected for session ${sessionId}`);
+        } catch (error) {
+          console.error('Error disconnecting RealtimeSession:', error);
+        }
+      }
+
       // Update session status
-      sessionManager.updateSession(sessionId, { status: 'error' });
-      
-      console.log(`Cleaned up session: ${sessionId}`);
+      try {
+        sessionManager.updateSession(sessionId, { status: 'completed' });
+        console.log(`Session status updated for session ${sessionId}`);
+      } catch (error) {
+        console.error('Error updating session status:', error);
+      }
+
+      console.log(`Successfully cleaned up session: ${sessionId}`);
     } catch (error) {
       console.error('Error during cleanup:', error);
     }
   }
 
-  stop() {
+  async stop() {
     if (this.wss) {
       // Clean up all active sessions
+      const cleanupPromises = [];
       for (const [ws, sessionData] of this.activeSessions.entries()) {
-        this.cleanup(sessionData.sessionId, sessionData.realtimeSession);
+        cleanupPromises.push(
+          this.cleanup(sessionData.sessionId, sessionData.realtimeSession).catch(error => {
+            console.error(`Error cleaning up session ${sessionData.sessionId}:`, error);
+          })
+        );
       }
-      
+
+      // Wait for all cleanups to complete
+      await Promise.all(cleanupPromises);
+
       this.wss.close();
       console.log('WebSocket server stopped');
     }
