@@ -1,15 +1,28 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import { Buffer } from 'buffer';
+import fs from 'fs/promises';
+import path from 'path';
 
 class RecordingService {
   constructor() {
-    this.s3Client = new S3Client({
-      region: process.env.AWS_REGION || 'us-east-1'
-    });
-    
-    this.bucketName = process.env.RECORDINGS_BUCKET || 'insurance-voice-agent-recordings-production';
+    // Local file system storage configuration
+    this.recordingsDir = process.env.RECORDINGS_DIR || path.join(process.cwd(), 'local-conversations');
     this.recordings = new Map(); // In-memory storage for active recordings
+
+    // Ensure recordings directory exists
+    this.ensureRecordingsDirectory();
+  }
+
+  /**
+   * Ensure the recordings directory exists
+   */
+  async ensureRecordingsDirectory() {
+    try {
+      await fs.mkdir(this.recordingsDir, { recursive: true });
+      console.log(`Recordings directory ensured: ${this.recordingsDir}`);
+    } catch (error) {
+      console.error('Error creating recordings directory:', error);
+    }
   }
 
   /**
@@ -100,7 +113,7 @@ class RecordingService {
   }
 
   /**
-   * Stop recording and save to S3
+   * Stop recording and save to local file system
    */
   async stopRecording(sessionId, finalMetadata = {}) {
     const recording = this.recordings.get(sessionId);
@@ -119,20 +132,20 @@ class RecordingService {
     };
 
     try {
-      // Save to S3
-      const s3Results = await this.saveToS3(recording);
-      
+      // Save to local file system
+      const localResults = await this.saveToLocalFileSystem(recording);
+
       // Clean up from memory
       this.recordings.delete(sessionId);
-      
+
       console.log(`Recording completed and saved for session ${sessionId}`);
       return {
         recordingId: recording.recordingId,
         sessionId,
-        s3Results,
+        localResults,
         metadata: recording.metadata
       };
-      
+
     } catch (error) {
       recording.status = 'error';
       recording.error = error.message;
@@ -142,30 +155,42 @@ class RecordingService {
   }
 
   /**
-   * Save recording data to S3
+   * Save recording data to local file system
    */
-  async saveToS3(recording) {
+  async saveToLocalFileSystem(recording) {
     const { recordingId, sessionId, startTime } = recording;
     const datePrefix = new Date(startTime).toISOString().split('T')[0]; // YYYY-MM-DD
-    
+    const timePrefix = new Date(startTime).toISOString().replace(/[:.]/g, '-').split('T')[1].split('Z')[0]; // HH-MM-SS-mmm
+
+    // Create session directory
+    const sessionDir = path.join(this.recordingsDir, datePrefix, sessionId);
+    await fs.mkdir(sessionDir, { recursive: true });
+
     const results = {
       audioFile: null,
       transcriptFile: null,
-      metadataFile: null
+      metadataFile: null,
+      conversationFile: null
     };
 
     try {
-      // 1. Save raw audio (concatenated chunks)
+      // 1. Save raw audio (concatenated chunks) as WAV
       if (recording.audioChunks.length > 0) {
         const audioBuffer = this.concatenateAudioChunks(recording.audioChunks);
-        const audioKey = `recordings/${datePrefix}/${sessionId}/${recordingId}_audio.wav`;
-        
-        await this.uploadToS3(audioKey, audioBuffer, 'audio/wav');
+        const audioFilename = `${recordingId}_${timePrefix}_audio.wav`;
+        const audioPath = path.join(sessionDir, audioFilename);
+
+        // Create WAV header for PCM16 audio
+        const wavBuffer = this.createWavFile(audioBuffer, recording.audioFormat);
+        await fs.writeFile(audioPath, wavBuffer);
+
         results.audioFile = {
-          key: audioKey,
-          size: audioBuffer.length,
-          url: `s3://${this.bucketName}/${audioKey}`
+          path: audioPath,
+          filename: audioFilename,
+          size: wavBuffer.length,
+          format: 'wav'
         };
+        console.log(`Saved audio file: ${audioPath}`);
       }
 
       // 2. Save transcript as JSON
@@ -178,21 +203,36 @@ class RecordingService {
           segments: recording.transcriptSegments,
           fullTranscript: this.generateFullTranscript(recording.transcriptSegments)
         };
-        
-        const transcriptKey = `recordings/${datePrefix}/${sessionId}/${recordingId}_transcript.json`;
-        const transcriptBuffer = Buffer.from(JSON.stringify(transcriptData, null, 2));
-        
-        await this.uploadToS3(transcriptKey, transcriptBuffer, 'application/json');
+
+        const transcriptFilename = `${recordingId}_${timePrefix}_transcript.json`;
+        const transcriptPath = path.join(sessionDir, transcriptFilename);
+        await fs.writeFile(transcriptPath, JSON.stringify(transcriptData, null, 2));
+
         results.transcriptFile = {
-          key: transcriptKey,
-          size: transcriptBuffer.length,
-          url: `s3://${this.bucketName}/${transcriptKey}`
+          path: transcriptPath,
+          filename: transcriptFilename,
+          size: Buffer.byteLength(JSON.stringify(transcriptData, null, 2))
         };
+        console.log(`Saved transcript file: ${transcriptPath}`);
       }
 
-      // 3. Save metadata
-      const metadataKey = `recordings/${datePrefix}/${sessionId}/${recordingId}_metadata.json`;
-      const metadataBuffer = Buffer.from(JSON.stringify({
+      // 3. Save conversation as readable text file
+      if (recording.transcriptSegments.length > 0) {
+        const conversationText = this.generateReadableConversation(recording);
+        const conversationFilename = `${recordingId}_${timePrefix}_conversation.txt`;
+        const conversationPath = path.join(sessionDir, conversationFilename);
+        await fs.writeFile(conversationPath, conversationText);
+
+        results.conversationFile = {
+          path: conversationPath,
+          filename: conversationFilename,
+          size: Buffer.byteLength(conversationText)
+        };
+        console.log(`Saved conversation file: ${conversationPath}`);
+      }
+
+      // 4. Save metadata
+      const metadataContent = {
         recordingId,
         sessionId,
         startTime: recording.startTime,
@@ -205,21 +245,30 @@ class RecordingService {
           totalTranscriptSegments: recording.transcriptSegments.length,
           totalAudioSize: recording.audioChunks.reduce((sum, chunk) => sum + chunk.size, 0),
           duration: recording.metadata.duration
+        },
+        files: {
+          audioFile: results.audioFile?.filename || null,
+          transcriptFile: results.transcriptFile?.filename || null,
+          conversationFile: results.conversationFile?.filename || null
         }
-      }, null, 2));
-      
-      await this.uploadToS3(metadataKey, metadataBuffer, 'application/json');
-      results.metadataFile = {
-        key: metadataKey,
-        size: metadataBuffer.length,
-        url: `s3://${this.bucketName}/${metadataKey}`
       };
 
+      const metadataFilename = `${recordingId}_${timePrefix}_metadata.json`;
+      const metadataPath = path.join(sessionDir, metadataFilename);
+      await fs.writeFile(metadataPath, JSON.stringify(metadataContent, null, 2));
+
+      results.metadataFile = {
+        path: metadataPath,
+        filename: metadataFilename,
+        size: Buffer.byteLength(JSON.stringify(metadataContent, null, 2))
+      };
+      console.log(`Saved metadata file: ${metadataPath}`);
+
       return results;
-      
+
     } catch (error) {
-      console.error('Error uploading to S3:', error);
-      throw new Error(`Failed to save recording to S3: ${error.message}`);
+      console.error('Error saving to local file system:', error);
+      throw new Error(`Failed to save recording to local file system: ${error.message}`);
     }
   }
 

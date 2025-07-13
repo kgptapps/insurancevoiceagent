@@ -29,10 +29,18 @@ class RealtimeSessionLogger {
       session,
       conversation,
       lastHistoryLength: 0,
-      setupTime: new Date().toISOString()
+      setupTime: new Date().toISOString(),
+      historyCheckInterval: null
     });
 
-    console.log(`Setup session logging for ${sessionId}`);
+    // Set up periodic history checking (every 5 seconds)
+    const historyCheckInterval = setInterval(() => {
+      this.checkAndCaptureHistory(sessionId);
+    }, 5000);
+
+    this.sessionLoggers.get(sessionId).historyCheckInterval = historyCheckInterval;
+
+    console.log(`✅ Setup session logging for ${sessionId}`);
     return conversation;
   }
 
@@ -40,13 +48,17 @@ class RealtimeSessionLogger {
    * Attach event listeners to OpenAI RealtimeSession
    */
   attachSessionEventListeners(session, sessionId) {
+    console.log(`🎧 Attaching event listeners for session ${sessionId}`);
+
     // Listen for history updates (OpenAI's built-in feature)
     session.on('history_updated', (history) => {
+      console.log(`📝 History updated for session ${sessionId}: ${history.length} items`);
       this.handleHistoryUpdate(sessionId, history);
     });
 
     // Listen for audio events
     session.on('audio', (audioEvent) => {
+      console.log(`🎵 Audio event for session ${sessionId}:`, audioEvent.type);
       conversationLogger.logEvent(sessionId, 'audio_received', {
         type: audioEvent.type,
         timestamp: new Date().toISOString(),
@@ -56,6 +68,7 @@ class RealtimeSessionLogger {
 
     // Listen for transcript events
     session.on('transcript', (transcriptEvent) => {
+      console.log(`📄 Transcript event for session ${sessionId}:`, transcriptEvent.transcript);
       conversationLogger.logEvent(sessionId, 'transcript', {
         transcript: transcriptEvent.transcript,
         speaker: transcriptEvent.speaker || 'user',
@@ -66,6 +79,7 @@ class RealtimeSessionLogger {
 
     // Listen for tool calls
     session.on('tool_call', (toolEvent) => {
+      console.log(`🔧 Tool call for session ${sessionId}:`, toolEvent.name);
       conversationLogger.logEvent(sessionId, 'tool_call', {
         toolName: toolEvent.name,
         arguments: toolEvent.arguments,
@@ -75,6 +89,7 @@ class RealtimeSessionLogger {
 
     // Listen for tool call results
     session.on('tool_call_result', (resultEvent) => {
+      console.log(`✅ Tool call result for session ${sessionId}:`, resultEvent.name);
       conversationLogger.logEvent(sessionId, 'tool_call_result', {
         toolName: resultEvent.name,
         result: resultEvent.result,
@@ -84,9 +99,28 @@ class RealtimeSessionLogger {
 
     // Listen for agent responses
     session.on('response', (responseEvent) => {
+      console.log(`🤖 Agent response for session ${sessionId}:`, responseEvent.type);
       conversationLogger.logEvent(sessionId, 'agent_response', {
         type: responseEvent.type,
         content: responseEvent.content,
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    // Listen for user messages
+    session.on('user_message', (messageEvent) => {
+      console.log(`👤 User message for session ${sessionId}:`, messageEvent.content);
+      conversationLogger.logEvent(sessionId, 'user_message', {
+        content: messageEvent.content,
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    // Listen for assistant messages
+    session.on('assistant_message', (messageEvent) => {
+      console.log(`🤖 Assistant message for session ${sessionId}:`, messageEvent.content);
+      conversationLogger.logEvent(sessionId, 'assistant_message', {
+        content: messageEvent.content,
         timestamp: new Date().toISOString()
       });
     });
@@ -102,12 +136,14 @@ class RealtimeSessionLogger {
 
     // Listen for connection events
     session.on('connected', () => {
+      console.log(`🔗 Session connected for ${sessionId}`);
       conversationLogger.logEvent(sessionId, 'session_connected', {
         timestamp: new Date().toISOString()
       });
     });
 
     session.on('disconnected', () => {
+      console.log(`🔌 Session disconnected for ${sessionId}`);
       conversationLogger.logEvent(sessionId, 'session_disconnected', {
         timestamp: new Date().toISOString()
       });
@@ -115,7 +151,18 @@ class RealtimeSessionLogger {
 
     // Listen for interruptions
     session.on('audio_interrupted', () => {
+      console.log(`⏸️ Audio interrupted for ${sessionId}`);
       conversationLogger.logEvent(sessionId, 'audio_interrupted', {
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    // Listen for all events (catch-all for debugging)
+    session.on('*', (eventName, eventData) => {
+      console.log(`🎯 Event '${eventName}' for session ${sessionId}:`, eventData);
+      conversationLogger.logEvent(sessionId, `raw_event_${eventName}`, {
+        eventName,
+        eventData,
         timestamp: new Date().toISOString()
       });
     });
@@ -142,10 +189,36 @@ class RealtimeSessionLogger {
 
     // Only log if history has actually changed
     if (history.length !== sessionLogger.lastHistoryLength) {
+      console.log(`📝 History updated for session ${sessionId}: ${history.length} items (was ${sessionLogger.lastHistoryLength})`);
       conversationLogger.logHistorySnapshot(sessionId, history, 'history_updated');
       sessionLogger.lastHistoryLength = history.length;
-      
-      console.log(`History updated for session ${sessionId}: ${history.length} items`);
+
+      // Log the actual history content for debugging
+      if (history.length > 0) {
+        console.log(`📋 Latest history items:`, history.slice(-2));
+      }
+    }
+  }
+
+  /**
+   * Periodically check and capture history (fallback method)
+   */
+  checkAndCaptureHistory(sessionId) {
+    const sessionLogger = this.sessionLoggers.get(sessionId);
+    if (!sessionLogger) {
+      return;
+    }
+
+    try {
+      // Get current history from OpenAI RealtimeSession
+      const currentHistory = sessionLogger.session.history || [];
+
+      if (currentHistory.length > sessionLogger.lastHistoryLength) {
+        console.log(`🔄 Periodic history check for session ${sessionId}: found ${currentHistory.length} items (was ${sessionLogger.lastHistoryLength})`);
+        this.handleHistoryUpdate(sessionId, currentHistory);
+      }
+    } catch (error) {
+      console.error(`Error during periodic history check for session ${sessionId}:`, error);
     }
   }
 
@@ -185,10 +258,15 @@ class RealtimeSessionLogger {
       sessionDuration: this.calculateSessionDuration(sessionLogger.setupTime)
     });
 
+    // Clean up interval
+    if (sessionLogger.historyCheckInterval) {
+      clearInterval(sessionLogger.historyCheckInterval);
+    }
+
     // Clean up
     this.sessionLoggers.delete(sessionId);
-    
-    console.log(`Ended session logging for ${sessionId}`);
+
+    console.log(`🏁 Ended session logging for ${sessionId}`);
     return result;
   }
 

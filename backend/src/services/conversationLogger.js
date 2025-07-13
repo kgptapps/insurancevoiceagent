@@ -126,10 +126,23 @@ class ConversationLogger {
       toolCalls: 0,
       lastActivity: null,
       topics: [],
-      insuranceData: {}
+      insuranceData: {},
+      conversationText: this.generateReadableConversation(history),
+      messageDetails: []
     };
 
     for (const item of history) {
+      // Capture detailed message information
+      const messageDetail = {
+        id: item.id || item.itemId,
+        type: item.type,
+        role: item.role,
+        content: item.content,
+        timestamp: item.timestamp || new Date().toISOString(),
+        status: item.status
+      };
+      state.messageDetails.push(messageDetail);
+
       if (item.type === 'message') {
         state.totalMessages++;
         if (item.role === 'user') {
@@ -138,7 +151,7 @@ class ConversationLogger {
           state.assistantMessages++;
         }
         state.lastActivity = item.timestamp || new Date().toISOString();
-      } else if (item.type === 'function_call') {
+      } else if (item.type === 'function_call' || item.type === 'tool_call') {
         state.toolCalls++;
       }
 
@@ -149,6 +162,49 @@ class ConversationLogger {
     }
 
     return state;
+  }
+
+  /**
+   * Generate readable conversation from history
+   */
+  generateReadableConversation(history) {
+    if (!history || history.length === 0) {
+      return "No conversation history available.";
+    }
+
+    return history
+      .filter(item => item.content && (item.type === 'message' || item.type === 'response'))
+      .map(item => {
+        const timestamp = item.timestamp || new Date().toISOString();
+        const speaker = item.role === 'user' ? 'Customer' : 'AI Agent';
+        const content = typeof item.content === 'string' ? item.content : JSON.stringify(item.content);
+        return `[${timestamp}] ${speaker}: ${content}`;
+      })
+      .join('\n\n');
+  }
+
+  /**
+   * Extract insurance data from content (basic implementation)
+   */
+  extractInsuranceData(content, insuranceData) {
+    if (typeof content !== 'string') return;
+
+    // Basic extraction patterns - you can enhance this
+    const patterns = {
+      vehicleYear: /\b(19|20)\d{2}\b/g,
+      vehicleMake: /\b(Toyota|Honda|Ford|Chevrolet|BMW|Mercedes|Audi|Nissan|Hyundai|Kia|Subaru|Mazda|Volkswagen|Lexus|Acura|Infiniti|Cadillac|Lincoln|Buick|GMC|Jeep|Ram|Dodge|Chrysler)\b/gi,
+      phoneNumber: /\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/g,
+      email: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
+      zipCode: /\b\d{5}(-\d{4})?\b/g
+    };
+
+    for (const [key, pattern] of Object.entries(patterns)) {
+      const matches = content.match(pattern);
+      if (matches) {
+        insuranceData[key] = insuranceData[key] || [];
+        insuranceData[key].push(...matches);
+      }
+    }
   }
 
 
@@ -259,9 +315,23 @@ class ConversationLogger {
       await fs.writeFile(summaryFile, JSON.stringify(summary, null, 2));
       results.summaryFile = { path: summaryFile };
 
+      // 3. Save readable conversation transcript
+      const latestSnapshot = conversation.historySnapshots[conversation.historySnapshots.length - 1];
+      if (latestSnapshot && latestSnapshot.conversationState.conversationText) {
+        const transcriptFile = path.join(sessionDir, `${conversationId}_transcript.txt`);
+        await fs.writeFile(transcriptFile, latestSnapshot.conversationState.conversationText);
+        results.transcriptFile = { path: transcriptFile };
+      }
 
+      // 4. Save detailed events log
+      if (conversation.events.length > 0) {
+        const eventsFile = path.join(sessionDir, `${conversationId}_events.json`);
+        await fs.writeFile(eventsFile, JSON.stringify(conversation.events, null, 2));
+        results.eventsFile = { path: eventsFile };
+      }
 
       console.log(`💾 Conversation saved locally: ${sessionDir}`);
+      console.log(`📊 Saved files:`, Object.keys(results));
       return results;
 
     } catch (error) {

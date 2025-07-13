@@ -69,6 +69,151 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Debug endpoint to check active conversations
+app.get('/api/debug/conversations', async (req, res) => {
+  try {
+    const realtimeSessionLogger = (await import('./services/realtimeSessionLogger.js')).default;
+    const activeSessions = realtimeSessionLogger.getActiveSessions();
+
+    res.json({
+      success: true,
+      activeSessions,
+      count: activeSessions.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Debug endpoint to manually capture conversation history
+app.post('/api/debug/capture/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const realtimeSessionLogger = (await import('./services/realtimeSessionLogger.js')).default;
+
+    const snapshot = realtimeSessionLogger.captureSessionHistory(sessionId, 'manual_debug_capture');
+
+    res.json({
+      success: true,
+      sessionId,
+      snapshot,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint to save conversation from frontend
+app.post('/api/conversations/save', async (req, res) => {
+  try {
+    const conversationData = req.body;
+    const conversationLogger = (await import('./services/conversationLogger.js')).default;
+
+    console.log('💾 Received conversation data from frontend:', {
+      sessionId: conversationData.sessionId,
+      messageCount: conversationData.conversationData?.length || 0,
+      eventCount: conversationData.events?.length || 0
+    });
+
+    // Create a conversation entry and save it
+    const conversation = {
+      conversationId: conversationData.sessionId,
+      sessionId: conversationData.sessionId,
+      startTime: conversationData.startTime,
+      endTime: conversationData.endTime,
+      metadata: {
+        source: 'frontend_realtime_session',
+        userAgent: req.headers['user-agent'] || 'unknown',
+        ipAddress: req.ip || 'unknown',
+        ...conversationData.statistics
+      },
+      historySnapshots: [{
+        id: Date.now().toString(),
+        timestamp: conversationData.endTime,
+        eventType: 'conversation_end',
+        historyLength: conversationData.conversationData?.length || 0,
+        history: conversationData.conversationData || [],
+        conversationState: {
+          totalMessages: conversationData.statistics?.totalMessages || 0,
+          userMessages: conversationData.statistics?.userMessages || 0,
+          assistantMessages: conversationData.statistics?.agentMessages || 0,
+          conversationText: generateReadableConversation(conversationData.conversationData || []),
+          messageDetails: conversationData.conversationData || []
+        }
+      }],
+      events: conversationData.events || []
+    };
+
+    // Save using the existing conversation logger
+    const result = await conversationLogger.saveToLocalStorage(conversation);
+
+    res.json({
+      success: true,
+      conversationId: conversationData.sessionId,
+      savedFiles: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error saving frontend conversation:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Helper function to generate readable conversation
+function generateReadableConversation(conversationData) {
+  if (!conversationData || conversationData.length === 0) {
+    return "No conversation history available.";
+  }
+
+  return conversationData
+    .filter(item => item.content && item.role)
+    .map(item => {
+      const timestamp = item.timestamp || new Date().toISOString();
+      const speaker = item.role === 'user' ? 'Customer' : 'AI Agent';
+
+      // Extract text content from OpenAI's content structure
+      let content = '';
+      if (typeof item.content === 'string') {
+        content = item.content;
+      } else if (Array.isArray(item.content)) {
+        // OpenAI content is an array of content parts
+        content = item.content
+          .map(part => {
+            if (typeof part === 'string') return part;
+            if (part.type === 'text' && part.text) return part.text;
+            if (part.type === 'input_text' && part.text) return part.text;
+            if (part.type === 'audio' && part.transcript) return part.transcript;
+            return JSON.stringify(part);
+          })
+          .join(' ');
+      } else if (typeof item.content === 'object' && item.content.text) {
+        content = item.content.text;
+      } else {
+        content = JSON.stringify(item.content);
+      }
+
+      // Skip system/greeting messages
+      if (content.includes('Please start the conversation with your greeting')) {
+        return null;
+      }
+
+      return `[${timestamp}] ${speaker}: ${content}`;
+    })
+    .filter(Boolean) // Remove null entries
+    .join('\n\n');
+}
+
 // Session management endpoints
 app.post('/api/sessions', (req, res) => {
   try {

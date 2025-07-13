@@ -7,6 +7,112 @@ import {
 } from './types/insurance';
 import { apiUrl } from './config/environment';
 
+// Simple conversation logger for frontend
+class FrontendConversationLogger {
+  private sessionId: string | null = null;
+  private conversationData: any[] = [];
+  private events: any[] = [];
+  private startTime: string | null = null;
+  public loggedMessageIds: Set<string> = new Set();
+  public lastHistoryLength: number = 0;
+
+  startLogging(sessionId: string) {
+    this.sessionId = sessionId;
+    this.conversationData = [];
+    this.events = [];
+    this.startTime = new Date().toISOString();
+    this.loggedMessageIds = new Set();
+    this.lastHistoryLength = 0;
+    console.log('🎯 Started frontend conversation logging for session:', sessionId);
+  }
+
+  logEvent(eventType: string, data: any) {
+    if (!this.sessionId) return;
+
+    const event = {
+      id: Date.now() + Math.random(),
+      timestamp: new Date().toISOString(),
+      type: eventType,
+      data
+    };
+
+    this.events.push(event);
+    console.log(`📝 Logged event: ${eventType}`, data);
+  }
+
+  logConversationItem(role: string, content: string, metadata: any = {}) {
+    if (!this.sessionId) return;
+
+    const item = {
+      id: Date.now() + Math.random(),
+      timestamp: new Date().toISOString(),
+      role,
+      content,
+      metadata
+    };
+
+    this.conversationData.push(item);
+    console.log(`💬 Logged ${role} message:`, content.substring(0, 100) + '...');
+  }
+
+  getUniqueConversationData() {
+    // Remove duplicates and sort by timestamp
+    const uniqueItems = this.conversationData.filter((item, index, array) => {
+      return array.findIndex(other =>
+        other.content === item.content &&
+        other.role === item.role &&
+        Math.abs(new Date(other.timestamp).getTime() - new Date(item.timestamp).getTime()) < 1000
+      ) === index;
+    });
+
+    return uniqueItems.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
+  async saveConversation() {
+    if (!this.sessionId || !this.startTime) return;
+
+    const uniqueConversationData = this.getUniqueConversationData();
+
+    const conversationSummary = {
+      sessionId: this.sessionId,
+      startTime: this.startTime,
+      endTime: new Date().toISOString(),
+      conversationData: uniqueConversationData,
+      events: this.events,
+      statistics: {
+        totalMessages: uniqueConversationData.length,
+        userMessages: uniqueConversationData.filter(item => item.role === 'user').length,
+        agentMessages: uniqueConversationData.filter(item => item.role === 'assistant').length,
+        totalEvents: this.events.length
+      }
+    };
+
+    try {
+      console.log('💾 Saving conversation to backend...', conversationSummary);
+
+      const response = await fetch(`${apiUrl}/api/conversations/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(conversationSummary)
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ Conversation saved successfully:', result);
+        return result;
+      } else {
+        console.error('❌ Failed to save conversation:', response.status, response.statusText);
+      }
+    } catch (error) {
+      console.error('❌ Error saving conversation:', error);
+    }
+  }
+}
+
+const frontendLogger = new FrontendConversationLogger();
+
 function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [status, setStatus] = useState('Ready to connect');
@@ -145,6 +251,15 @@ function App() {
       // Disconnect
       setIsConnected(false);
       setStatus('Disconnecting...');
+
+      // Save conversation before disconnecting
+      try {
+        console.log('💾 Saving conversation before disconnect...');
+        await frontendLogger.saveConversation();
+      } catch (error) {
+        console.error('Error saving conversation:', error);
+      }
+
       if (sessionRef.current) {
         try {
           await sessionRef.current.close();
@@ -242,6 +357,10 @@ Remember:
           }
         });
 
+        // Start conversation logging
+        const sessionId = 'frontend_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        frontendLogger.startLogging(sessionId);
+
         // Set up event listeners for audio and conversation
         sessionRef.current.on('transport_event', (event: any) => {
           console.log('Transport event:', event.type, event);
@@ -318,8 +437,96 @@ Remember:
           }
         });
 
+        // Listen for conversation history updates (OpenAI standard)
+        sessionRef.current.on('history_updated', (history: any[]) => {
+          console.log('📝 Conversation history updated:', history.length, 'items');
+
+          // Only process new items to avoid duplicates
+          if (history.length <= frontendLogger.lastHistoryLength) {
+            return; // No new items
+          }
+
+          // Log the conversation history to our frontend logger
+          frontendLogger.logEvent('history_updated', {
+            historyLength: history.length,
+            newItems: history.length - frontendLogger.lastHistoryLength
+          });
+
+          // Process only new items (from lastHistoryLength to end)
+          const newItems = history.slice(frontendLogger.lastHistoryLength);
+
+          console.log(`🔍 Processing ${newItems.length} new items:`, newItems.map(item => ({
+            type: item.type,
+            role: item.role,
+            id: item.id,
+            hasContent: !!item.content,
+            contentType: typeof item.content
+          })));
+
+          newItems.forEach((item, index) => {
+            if (item.type === 'message' && item.id) {
+              // Check if we've already logged this message
+              const messageKey = `${item.id}_${item.role}`;
+              if (frontendLogger.loggedMessageIds.has(messageKey)) {
+                return; // Skip duplicate
+              }
+
+              // Extract text content from OpenAI's content structure
+              let content = '';
+              if (typeof item.content === 'string') {
+                content = item.content;
+              } else if (Array.isArray(item.content)) {
+                content = item.content
+                  .map((part: any) => {
+                    if (typeof part === 'string') return part;
+                    if (part.type === 'text' && part.text) return part.text;
+                    if (part.type === 'input_text' && part.text) return part.text;
+                    if (part.type === 'audio' && part.transcript) return part.transcript;
+                    return '';
+                  })
+                  .filter(Boolean)
+                  .join(' ');
+              } else if (typeof item.content === 'object' && item.content.text) {
+                content = item.content.text;
+              } else {
+                content = 'No content';
+              }
+
+              // Skip empty content or system messages
+              if (!content || content.trim() === '' ||
+                  content.includes('Please start the conversation with your greeting')) {
+                return;
+              }
+
+              // Mark as logged and add to conversation
+              frontendLogger.loggedMessageIds.add(messageKey);
+              frontendLogger.logConversationItem(item.role, content, {
+                itemId: item.id,
+                historyIndex: frontendLogger.lastHistoryLength + index,
+                itemType: item.type,
+                originalItem: item // Store the original item for debugging
+              });
+
+              console.log(`💬 Captured ${item.role} message: "${content.substring(0, 50)}..."`);
+            } else {
+              // Log items that are being skipped for debugging
+              console.log(`⏭️ Skipped item:`, {
+                type: item.type,
+                role: item.role,
+                hasId: !!item.id,
+                contentType: typeof item.content,
+                contentLength: item.content ? (Array.isArray(item.content) ? item.content.length : item.content.toString().length) : 0
+              });
+            }
+          });
+
+          // Update the last processed history length
+          frontendLogger.lastHistoryLength = history.length;
+        });
+
         sessionRef.current.on('error', (error: any) => {
           console.error('Session error:', error);
+          frontendLogger.logEvent('session_error', { error: error.message });
           setStatus(`Error: ${error.message || 'Unknown error'}`);
         });
 
